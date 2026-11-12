@@ -1,0 +1,2008 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>InteractiveBrokersVR - unofficial VR mock</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="An unofficial WebXR design mock of a brokerage mobile app in VR. Example data only, nothing is sent anywhere.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@500&display=swap">
+<style>
+:root{--bg:#0a0f18;--fg:#eaf2fe;--muted:#8fa3c2;--card:#141f31;--line:#2a3b5c;--accent:#5998f5;
+--ui:'Geist',system-ui,-apple-system,'Segoe UI',sans-serif}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:var(--ui);font-size:14px;overflow:hidden}
+canvas{display:block}
+#notes{position:fixed;top:12px;left:12px;width:340px;max-height:calc(100% - 90px);overflow-y:auto;z-index:5;
+background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;line-height:1.45}
+#notes h1{font-size:16px;margin:0 0 4px}
+#notes h2{font-size:12px;margin:12px 0 4px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:500}
+#notes p,#notes ul{margin:0}
+#notes ul{padding-left:18px}
+#notes li{margin:2px 0}
+#notes .hint{color:var(--muted)}
+#notes button{font:inherit;color:var(--fg);background:transparent;border:1px solid var(--line);border-radius:8px;
+padding:4px 10px;cursor:pointer;margin-top:8px}
+body.in-vr #notes{display:none}
+#vr-status{position:fixed;left:12px;bottom:12px;z-index:5;color:var(--muted);font-size:12px}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+"three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<div id="notes">
+<h1>InteractiveBrokersVR</h1>
+<p class="hint">An unofficial design mock of a brokerage mobile app in VR.
+It is not affiliated with Interactive Brokers, uses none of its logos or assets, and shows example data only.
+No order is sent anywhere and nothing asks for a login.
+Drag the background to look around, click to press, hold the blue Submit button to place a paper order.
+With a headset browser press Enter VR and use the controller ray and trigger.</p>
+<button id="notes-toggle" type="button">Show design notes</button>
+<div id="notes-body" hidden>
+<h2>Screens</h2>
+<ul>
+<li>Left, the watchlist.
+Center, the chart with periods, or the portfolio, orders, markets, news and menu, chosen by the tab bar at the bottom of the board.
+Right, the order ticket.</li>
+<li>The top bar holds the account figures.</li>
+</ul>
+<h2>Portfolio constellation</h2>
+<ul>
+<li>On the table, every watchlist symbol is an orb orbiting the account core.
+Held positions are bigger, green or red by the day change; the core and its beam follow the day P&amp;L.</li>
+<li>Press an orb to select the symbol, which updates the chart and the ticket.
+Mouse wheel, thumbstick up and down, or the deck buttons zoom in and out, and the last deck button changes what the size means.</li>
+<li>Submitting a paper order sends a pulse through the orb.</li>
+</ul>
+<h2>Sky</h2>
+<ul>
+<li>Look up for the indices ring and the news ring.
+Both are example data on a timer.</li>
+</ul>
+<h2>Input</h2>
+<ul>
+<li>One ray and one trigger per hand, large targets, no sliders: values change with plus and minus buttons.</li>
+<li>Submitting needs a hold of 1.2 s; releasing early cancels.</li>
+<li>Drag the bar at the top of a panel to move it; the right mouse button or the controller grip drags a panel from anywhere.
+Reset layout is in the Menu tab.</li>
+</ul>
+</div>
+</div>
+<div id="vr-status"></div>
+<script type="module">
+import * as THREE from 'three'
+import { VRButton } from 'three/addons/webxr/VRButton.js'
+
+const PIXELS_PER_METER = 600
+const EYE_HEIGHT = 1.6
+const PANEL_RADIUS = 1.9
+const MIN_FONT_PX = 22
+const HOLD_MS_DEFAULT = 1200
+const HOLD_MS_PRODUCTION = 2000
+const TICK_MS = 1000
+const TOAST_MS = 4000
+const INSTANCES_PER_PAGE = 10
+const LAYOUT_STORAGE_KEY = 'vantage-vr-mock-layout'
+const ANGLE_STEP_DEGREES = 5
+const HEIGHT_STEP_METERS = 0.05
+const MAX_ANGLE_DEGREES = 100
+const MIN_PANEL_CENTER_HEIGHT = 0.7
+const MAX_PANEL_CENTER_HEIGHT = 2.5
+const PANEL_GAP_DEGREES = 1
+const HANDLE_HEIGHT_PX = 44
+
+
+const HOLD_MS = 1200
+const SPARKLINE_LENGTH = 40
+
+const THEMES = {
+  dark: {
+    scene: 0x0a0f18, background: '#141f31', card: '#1a2740', foreground: '#eaf2fe', muted: '#223250',
+    mutedForeground: '#8fa3c2', border: '#2a3b5c', accent: '#2b3f66', primary: '#5998f5', primaryForeground: '#0b1220',
+    positive: '#6ed19d', negative: '#f0646a', warning: '#f2c14e', info: '#5998f5', sidebar: '#101a2b',
+    navActive: '#83b2f7', navActiveBackground: 'rgba(89,152,245,0.18)', hover: 'rgba(255,255,255,0.08)',
+  },
+  light: {
+    scene: 0xe6ecf5, background: '#f5f9fe', card: '#ffffff', foreground: '#122543', muted: '#eaf2fe',
+    mutedForeground: '#5d6f8f', border: '#d6e5fc', accent: '#d6e5fc', primary: '#0055d4', primaryForeground: '#ffffff',
+    positive: '#018740', negative: '#c62828', warning: '#b7791f', info: '#0055d4', sidebar: '#ffffff',
+    navActive: '#0055d4', navActiveBackground: 'rgba(0,85,212,0.1)', hover: 'rgba(0,0,0,0.06)',
+  },
+}
+
+const TABS = [['trade', 'Trade'], ['portfolio', 'Portfolio'], ['orders', 'Orders'], ['markets', 'Markets'], ['news', 'News'], ['menu', 'Menu']]
+const PAGE_TITLES = { trade: 'Trade', portfolio: 'Portfolio', orders: 'Orders', markets: 'Markets', news: 'News', menu: 'Menu' }
+const ORDER_TYPES = ['MKT', 'LMT']
+const QUANTITY_STEP = 10
+const LIMIT_STEP = 0.05
+const COMMISSION = 1
+
+const state = {
+  theme: 'dark',
+  page: 'trade',
+  symbol: 'AAPL',
+  period: '1D',
+  seated: false,
+  toast: '',
+  toastUntil: 0,
+  order: { side: 'BUY', type: 'MKT', quantity: 100, limit: 228.4 },
+}
+
+const theme = () => THEMES[state.theme]
+const signedColor = (value) => (value > 0 ? theme().positive : value < 0 ? theme().negative : theme().foreground)
+
+const usd0 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+const usd2 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const num2 = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const int0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
+const pct2 = new Intl.NumberFormat('en-US', { signDisplay: 'always', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+function createRandom(seed) {
+  let a = seed
+  return () => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+const random = createRandom(2026)
+const between = (low, high) => low + random() * (high - low)
+const hashText = (text) => [...text].reduce((hash, character) => (Math.imul(hash, 31) + character.charCodeAt(0)) | 0, 7)
+
+const SYMBOLS = [
+  { symbol: 'AAPL', name: 'Apple Inc', price: 228.4 }, { symbol: 'MSFT', name: 'Microsoft Corp', price: 415.2 },
+  { symbol: 'NVDA', name: 'NVIDIA Corp', price: 131.7 }, { symbol: 'TSLA', name: 'Tesla Inc', price: 243.9 },
+  { symbol: 'AMZN', name: 'Amazon.com Inc', price: 186.3 }, { symbol: 'GOOGL', name: 'Alphabet Inc', price: 171.5 },
+  { symbol: 'META', name: 'Meta Platforms', price: 563.2 }, { symbol: 'SPY', name: 'S&P 500 ETF', price: 581.2 },
+  { symbol: 'QQQ', name: 'Nasdaq 100 ETF', price: 492.4 },
+]
+const PERIODS = [['1D', 78, 0.0012], ['1W', 35, 0.004], ['1M', 22, 0.01], ['3M', 63, 0.012], ['1Y', 52, 0.03]]
+
+function buildSeries(price, length, volatility) {
+  const list = []
+  let value = price
+  for (let i = 0; i < length; i++) {
+    list.unshift(value)
+    value /= 1 + between(-volatility, volatility)
+  }
+  return list
+}
+
+function buildCandles(quote, [label, count, volatility]) {
+  const rng = createRandom(hashText(`${quote.symbol}${label}`))
+  const list = []
+  let close = quote.last
+  for (let i = 0; i < count; i++) {
+    const open = close * (1 + (rng() - 0.5) * 2 * volatility)
+    list.unshift({
+      open, close, high: Math.max(open, close) * (1 + rng() * volatility * 0.6), low: Math.min(open, close) * (1 - rng() * volatility * 0.6),
+    })
+    close = open
+  }
+  return list
+}
+
+const quotes = SYMBOLS.map((entry) => ({
+  ...entry, last: entry.price, prevClose: entry.price * (1 + between(-0.012, 0.012)),
+  series: buildSeries(entry.price, SPARKLINE_LENGTH, 0.002), candles: new Map(), volume: Math.floor(between(8, 60)) * 1e6,
+}))
+const quoteOf = (symbol) => quotes.find((quote) => quote.symbol === symbol)
+const changeOf = (quote) => (quote.last - quote.prevClose) / quote.prevClose
+const candlesOf = (quote, period) => {
+  if (!quote.candles.has(period)) quote.candles.set(period, buildCandles(quote, PERIODS.find(([label]) => label === period)))
+  return quote.candles.get(period)
+}
+
+const positions = [
+  { symbol: 'AAPL', quantity: 120, avgCost: 205.3 }, { symbol: 'MSFT', quantity: 40, avgCost: 392.1 },
+  { symbol: 'NVDA', quantity: 300, avgCost: 118.4 }, { symbol: 'TSLA', quantity: 60, avgCost: 262 },
+  { symbol: 'AMZN', quantity: 80, avgCost: 170.9 }, { symbol: 'META', quantity: 25, avgCost: 480.2 },
+  { symbol: 'SPY', quantity: 50, avgCost: 559 },
+]
+const account = { id: 'DU1234567', cash: 18420.55 }
+const orders = [
+  { time: '09:31:12', side: 'BUY', symbol: 'AAPL', quantity: 100, type: 'MKT', price: null, status: 'Filled' },
+  { time: '10:05:44', side: 'SELL', symbol: 'TSLA', quantity: 40, type: 'LMT', price: 251.5, status: 'Working' },
+  { time: '10:42:09', side: 'BUY', symbol: 'NVDA', quantity: 200, type: 'LMT', price: 128.75, status: 'Working' },
+]
+
+function accountSummary() {
+  let marketValue = 0
+  let dayPnl = 0
+  let unrealized = 0
+  for (const position of positions) {
+    const quote = quoteOf(position.symbol)
+    marketValue += position.quantity * quote.last
+    dayPnl += position.quantity * (quote.last - quote.prevClose)
+    unrealized += position.quantity * (quote.last - position.avgCost)
+  }
+  return {
+    netLiq: account.cash + marketValue, marketValue, dayPnl, unrealized, cash: account.cash, buyingPower: account.cash * 4 + marketValue * 0.5,
+  }
+}
+
+function tickQuotes() {
+  for (const quote of quotes) {
+    quote.last *= 1 + between(-0.0007, 0.0007)
+    quote.series.push(quote.last)
+    quote.series.shift()
+    for (const candles of quote.candles.values()) {
+      const latest = candles[candles.length - 1]
+      latest.close = quote.last
+      latest.high = Math.max(latest.high, quote.last)
+      latest.low = Math.min(latest.low, quote.last)
+    }
+  }
+}
+
+function applyFill(symbol, side, quantity, price) {
+  const sign = side === 'BUY' ? 1 : -1
+  let position = positions.find((entry) => entry.symbol === symbol)
+  if (!position) {
+    position = { symbol, quantity: 0, avgCost: price }
+    positions.push(position)
+  }
+  const next = position.quantity + sign * quantity
+  if (Math.sign(next) === Math.sign(position.quantity) && Math.abs(next) > Math.abs(position.quantity)) {
+    position.avgCost = (position.avgCost * Math.abs(position.quantity) + price * quantity) / Math.abs(next)
+  } else if (Math.sign(next) !== Math.sign(position.quantity) && next !== 0) {
+    position.avgCost = price
+  }
+  position.quantity = next
+  account.cash -= sign * quantity * price + COMMISSION
+  if (next === 0) positions.splice(positions.indexOf(position), 1)
+}
+
+const clockText = () => new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+}).format(new Date())
+
+
+/* ---------- canvas drawing helpers ---------- */
+
+function fontFor(size, weight, mono) {
+  const family = mono ? '"Geist Mono", ui-monospace, monospace' : 'Geist, system-ui, sans-serif'
+  return `${weight} ${Math.max(size, MIN_FONT_PX)}px ${family}`
+}
+
+function drawText(ctx, text, x, y, { size = 24, weight = 500, color, align = 'left', mono = false, maxWidth } = {}) {
+  ctx.font = fontFor(size, weight, mono)
+  ctx.fillStyle = color ?? theme().foreground
+  ctx.textAlign = align
+  ctx.textBaseline = 'middle'
+  let shown = String(text)
+  if (maxWidth !== undefined) {
+    while (shown.length > 1 && ctx.measureText(shown).width > maxWidth) shown = shown.slice(0, -1)
+    if (shown.length < String(text).length) shown = `${shown.slice(0, -2)}..`
+  }
+  ctx.fillText(shown, x, y)
+}
+
+function fillRounded(ctx, x, y, w, h, radius, fill, stroke) {
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, radius)
+  if (fill) {
+    ctx.fillStyle = fill
+    ctx.fill()
+  }
+  if (stroke) {
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = 2
+    ctx.stroke()
+  }
+}
+
+function drawCard(ctx, x, y, w, h, title) {
+  const t = theme()
+  fillRounded(ctx, x, y, w, h, 20, t.card, t.border)
+  if (title) drawText(ctx, title, x + 24, y + 36, { size: 26, weight: 600 })
+}
+
+function drawButton(panel, id, x, y, w, h, label, options = {}) {
+  const { variant = 'secondary', onClick, hold, disabled = false } = options
+  const t = theme()
+  const palette = {
+    primary: { fill: t.primary, text: t.primaryForeground, stroke: null },
+    secondary: { fill: t.muted, text: t.foreground, stroke: null },
+    outline: { fill: null, text: t.foreground, stroke: t.border },
+    destructive: { fill: t.negative, text: '#ffffff', stroke: null },
+    ghost: { fill: null, text: t.foreground, stroke: null },
+  }[variant]
+  const ctx = panel.ctx
+  const hovered = !disabled && interaction.isHovered(panel, id)
+  ctx.globalAlpha = disabled ? 0.4 : 1
+  fillRounded(ctx, x, y, w, h, 14, palette.fill, palette.stroke)
+  if (hovered) fillRounded(ctx, x, y, w, h, 14, t.hover, t.info)
+  if (hold) {
+    const progress = interaction.holdProgress(panel, id)
+    if (progress > 0) fillRounded(ctx, x, y, w * progress, h, 14, 'rgba(255,255,255,0.35)')
+  }
+  drawText(ctx, hold ? `${label} (hold)` : label, x + w / 2, y + h / 2, {
+    size: 24, weight: 600, color: palette.text, align: 'center', maxWidth: w - 16,
+  })
+  ctx.globalAlpha = 1
+  if (!disabled) panel.addRegion({ id, x, y, w, h, onClick, hold, disabled })
+}
+
+function drawTable(panel, x, y, w, columns, rows, { idPrefix, rowHeight = 56, selectedId, onRowClick }) {
+  const ctx = panel.ctx
+  const t = theme()
+  const headerHeight = 50
+  let cursor = x + 16
+  const layout = columns.map((column) => {
+    const width = (w - 32) * column.share
+    const placed = { column, left: cursor, width }
+    cursor += width
+    return placed
+  })
+  for (const { column, left, width } of layout) {
+    const textX = column.align === 'right' ? left + width - 12 : left + 12
+    drawText(ctx, column.label, textX, y + headerHeight / 2, {
+      size: 22, color: t.mutedForeground, align: column.align === 'right' ? 'right' : 'left',
+    })
+  }
+  ctx.fillStyle = t.border
+  ctx.fillRect(x + 8, y + headerHeight, w - 16, 2)
+  rows.forEach((row, index) => {
+    const rowTop = y + headerHeight + 4 + index * rowHeight
+    const regionId = `${idPrefix}:${row.id}`
+    if (row.id === selectedId) fillRounded(ctx, x + 8, rowTop, w - 16, rowHeight - 4, 10, t.accent)
+    else if (onRowClick && interaction.isHovered(panel, regionId)) fillRounded(ctx, x + 8, rowTop, w - 16, rowHeight - 4, 10, t.hover)
+    for (const { column, left, width } of layout) {
+      const cell = column.render(row)
+      const dotOffset = cell.dot ? 26 : 0
+      if (cell.dot) {
+        ctx.beginPath()
+        ctx.arc(left + 22, rowTop + rowHeight / 2 - 2, 8, 0, Math.PI * 2)
+        ctx.fillStyle = cell.dot
+        ctx.fill()
+      }
+      const align = column.align === 'right' ? 'right' : 'left'
+      const textX = align === 'right' ? left + width - 12 : left + 12 + dotOffset
+      drawText(ctx, cell.text, textX, rowTop + rowHeight / 2 - 2, {
+        size: 24, color: cell.color, align, mono: column.mono ?? false, maxWidth: width - 20 - dotOffset,
+      })
+    }
+    if (onRowClick) {
+      panel.addRegion({
+        id: regionId, x: x + 8, y: rowTop, w: w - 16, h: rowHeight - 4, onClick: () => onRowClick(row),
+      })
+    }
+  })
+}
+
+function drawAreaChart(ctx, x, y, w, h, series) {
+  const t = theme()
+  const low = Math.min(0, ...series)
+  const high = Math.max(0, ...series)
+  const span = high - low || 1
+  const toX = (index) => x + (index / (series.length - 1)) * w
+  const toY = (value) => y + h - ((value - low) / span) * h
+  const zeroY = toY(0)
+  ctx.strokeStyle = t.border
+  ctx.lineWidth = 2
+  ctx.setLineDash([8, 8])
+  ctx.beginPath()
+  ctx.moveTo(x, zeroY)
+  ctx.lineTo(x + w, zeroY)
+  ctx.stroke()
+  ctx.setLineDash([])
+  const last = series[series.length - 1]
+  const color = signedColor(last)
+  const gradient = ctx.createLinearGradient(0, y, 0, y + h)
+  gradient.addColorStop(0, color)
+  gradient.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.beginPath()
+  ctx.moveTo(toX(0), zeroY)
+  series.forEach((value, index) => ctx.lineTo(toX(index), toY(value)))
+  ctx.lineTo(toX(series.length - 1), zeroY)
+  ctx.closePath()
+  ctx.globalAlpha = 0.28
+  ctx.fillStyle = gradient
+  ctx.fill()
+  ctx.globalAlpha = 1
+  ctx.beginPath()
+  series.forEach((value, index) => (index === 0 ? ctx.moveTo(toX(0), toY(value)) : ctx.lineTo(toX(index), toY(value))))
+  ctx.strokeStyle = color
+  ctx.lineWidth = 4
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.arc(toX(series.length - 1), toY(last), 9, 0, Math.PI * 2)
+  ctx.fillStyle = color
+  ctx.fill()
+}
+
+
+/* ---------- panels ---------- */
+
+function drawHandle(panel) {
+  const ctx = panel.ctx
+  const t = theme()
+  const active = interaction.isHovered(panel, 'handle') || interaction.isDragged(panel)
+  ctx.globalAlpha = active ? 1 : 0.55
+  fillRounded(ctx, panel.width / 2 - 56, 10, 112, 10, 5, active ? t.info : t.mutedForeground)
+  ctx.globalAlpha = 1
+  panel.addRegion({ id: 'handle', x: 0, y: 0, w: panel.width, h: HANDLE_HEIGHT_PX, drag: true })
+}
+
+/* ---------- panels ---------- */
+
+class Panel {
+  constructor(name, widthMeters, heightMeters, drawFunction) {
+    this.name = name
+    this.widthMeters = widthMeters
+    this.heightMeters = heightMeters
+    this.angle = 0
+    this.centerHeight = EYE_HEIGHT
+    this.radius = PANEL_RADIUS
+    this.width = Math.round(widthMeters * PIXELS_PER_METER)
+    this.height = Math.round(heightMeters * PIXELS_PER_METER)
+    this.drawFunction = drawFunction
+    this.canvas = document.createElement('canvas')
+    this.canvas.width = this.width
+    this.canvas.height = this.height
+    this.ctx = this.canvas.getContext('2d')
+    this.regions = []
+    this.dirty = true
+    this.texture = new THREE.CanvasTexture(this.canvas)
+    this.texture.colorSpace = THREE.SRGBColorSpace
+    this.texture.anisotropy = 8
+    this.mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(widthMeters, heightMeters),
+      new THREE.MeshBasicMaterial({ map: this.texture, transparent: true, toneMapped: false }),
+    )
+    this.mesh.userData.panel = this
+  }
+
+  place(angleDegrees, centerHeight, radius = this.radius) {
+    this.radius = radius
+    this.angle = angleDegrees
+    this.centerHeight = centerHeight
+    const angle = THREE.MathUtils.degToRad(angleDegrees)
+    this.mesh.rotation.order = 'YXZ'
+    this.mesh.position.set(radius * Math.sin(angle), centerHeight, -radius * Math.cos(angle))
+    this.mesh.rotation.y = -angle
+    this.mesh.rotation.x = Math.atan2(centerHeight - EYE_HEIGHT, radius)
+    return this
+  }
+
+  addRegion(region) {
+    this.regions.push(region)
+  }
+
+  regionById(id) {
+    return this.regions.find((region) => region.id === id) ?? null
+  }
+
+  regionAt(u, v) {
+    const px = u * this.width
+    const py = (1 - v) * this.height
+    for (let i = this.regions.length - 1; i >= 0; i--) {
+      const r = this.regions[i]
+      if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) return r
+    }
+    return null
+  }
+
+  redraw() {
+    this.ctx.clearRect(0, 0, this.width, this.height)
+    this.regions = []
+    this.drawFunction(this, this.ctx)
+    drawHandle(this)
+    this.texture.needsUpdate = true
+    this.dirty = false
+  }
+}
+
+
+/* ---------- screens ---------- */
+
+const SECTORS = ['Tech', 'Health', 'Financials', 'Energy', 'Consumer', 'Industrials', 'Utilities', 'Materials', 'Real estate', 'Comm', 'Staples']
+  .map((name) => ({ name, change: between(-1.6, 1.8) }))
+
+function showToast(message) {
+  state.toast = message
+  state.toastUntil = performance.now() + TOAST_MS
+  invalidateAll()
+}
+
+function drawSparkline(ctx, series, x, y, w, h, color) {
+  const low = Math.min(...series)
+  const span = Math.max(...series) - low || 1
+  ctx.beginPath()
+  series.forEach((value, index) => {
+    const px = x + (index / (series.length - 1)) * w
+    const py = y + h - ((value - low) / span) * h
+    if (index === 0) ctx.moveTo(px, py)
+    else ctx.lineTo(px, py)
+  })
+  ctx.strokeStyle = color
+  ctx.lineWidth = 3
+  ctx.lineJoin = 'round'
+  ctx.stroke()
+}
+
+function drawTopBar(panel, ctx) {
+  const t = theme()
+  const summary = accountSummary()
+  fillRounded(ctx, 0, 0, panel.width, panel.height, 28, t.sidebar, t.border)
+  fillRounded(ctx, 24, panel.height / 2 - 28, 190, 56, 28, null, t.info)
+  drawText(ctx, `Paper ${account.id.slice(-4)}`, 119, panel.height / 2, { size: 24, weight: 600, color: t.info, align: 'center' })
+  const items = [
+    ['Net liquidation', summary.netLiq, false], ['Day P&L', summary.dayPnl, true],
+    ['Unrealized P&L', summary.unrealized, true], ['Cash', summary.cash, false],
+  ]
+  const left = 250
+  const columnWidth = (panel.width - left - 330) / items.length
+  items.forEach(([label, value, colored], index) => {
+    const x = left + index * columnWidth
+    drawText(ctx, label, x, 36, { size: 22, color: t.mutedForeground })
+    drawText(ctx, usd0.format(value), x, 82, { size: 32, weight: 600, mono: true, color: colored ? signedColor(value) : t.foreground })
+  })
+  drawText(ctx, `${clockText()} ET`, panel.width - 28, 36, { size: 28, mono: true, align: 'right' })
+  ctx.beginPath()
+  ctx.arc(panel.width - 190, 82, 9, 0, Math.PI * 2)
+  ctx.fillStyle = t.positive
+  ctx.fill()
+  drawText(ctx, 'Connected', panel.width - 28, 82, { size: 24, color: t.mutedForeground, align: 'right' })
+}
+
+function drawWatchlist(panel, ctx) {
+  const t = theme()
+  fillRounded(ctx, 0, 0, panel.width, panel.height, 28, t.sidebar, t.border)
+  drawText(ctx, 'Watchlist', 32, 64, { size: 34, weight: 600 })
+  quotes.forEach((quote, index) => {
+    const y = 108 + index * 78
+    const id = `watch:${quote.symbol}`
+    const change = changeOf(quote)
+    if (quote.symbol === state.symbol) fillRounded(ctx, 16, y, panel.width - 32, 70, 14, t.navActiveBackground)
+    else if (interaction.isHovered(panel, id)) fillRounded(ctx, 16, y, panel.width - 32, 70, 14, t.hover)
+    drawText(ctx, quote.symbol, 32, y + 24, { size: 26, weight: 600 })
+    drawText(ctx, quote.name, 32, y + 54, { size: 22, color: t.mutedForeground, maxWidth: 150 })
+    drawSparkline(ctx, quote.series, 190, y + 14, 100, 42, signedColor(change))
+    drawText(ctx, num2.format(quote.last), panel.width - 28, y + 24, { size: 26, mono: true, align: 'right' })
+    drawText(ctx, `${pct2.format(change * 100)}%`, panel.width - 28, y + 54, { size: 22, mono: true, align: 'right', color: signedColor(change) })
+    panel.addRegion({ id, x: 16, y, w: panel.width - 32, h: 70, onClick: () => selectSymbol(quote.symbol) })
+  })
+}
+
+function drawBoard(panel, ctx) {
+  const t = theme()
+  fillRounded(ctx, 0, 0, panel.width, panel.height, 28, t.background, t.border)
+  drawText(ctx, PAGE_TITLES[state.page], 40, 48, { size: 34, weight: 600 })
+  if (state.toast && performance.now() < state.toastUntil) {
+    drawText(ctx, state.toast, panel.width - 40, 48, { size: 24, color: t.info, align: 'right', maxWidth: panel.width - 360 })
+  } else {
+    drawText(ctx, 'Example data', panel.width - 40, 48, { size: 22, color: t.mutedForeground, align: 'right' })
+  }
+  const tabBarHeight = 96
+  const frame = { x: 28, y: 92, w: panel.width - 56, h: panel.height - 92 - tabBarHeight - 12 }
+  PAGE_DRAWERS[state.page](panel, ctx, frame)
+  const barY = panel.height - tabBarHeight
+  fillRounded(ctx, 8, barY, panel.width - 16, tabBarHeight - 8, 22, t.sidebar, t.border)
+  const tabWidth = (panel.width - 32) / TABS.length
+  TABS.forEach(([page, label], index) => {
+    const x = 16 + index * tabWidth
+    const id = `tab:${page}`
+    const active = state.page === page
+    if (active) fillRounded(ctx, x + 6, barY + 8, tabWidth - 12, tabBarHeight - 24, 16, t.navActiveBackground)
+    else if (interaction.isHovered(panel, id)) fillRounded(ctx, x + 6, barY + 8, tabWidth - 12, tabBarHeight - 24, 16, t.hover)
+    drawText(ctx, label, x + tabWidth / 2, barY + (tabBarHeight - 8) / 2, {
+      size: 26, weight: active ? 600 : 500, color: active ? t.navActive : t.foreground, align: 'center',
+    })
+    panel.addRegion({ id, x: x + 6, y: barY + 8, w: tabWidth - 12, h: tabBarHeight - 24, onClick: () => setPage(page) })
+  })
+}
+
+function drawCandles(ctx, x, y, w, h, candles, last) {
+  const t = theme()
+  const lowest = Math.min(...candles.map((candle) => candle.low))
+  const highest = Math.max(...candles.map((candle) => candle.high))
+  const pad = (highest - lowest) * 0.08
+  const low = lowest - pad
+  const span = highest + pad - low
+  const toY = (price) => y + h - ((price - low) / span) * h
+  const axisWidth = 130
+  ctx.strokeStyle = t.border
+  ctx.lineWidth = 2
+  for (let line = 0; line <= 4; line++) {
+    const gy = y + (line / 4) * h
+    ctx.beginPath()
+    ctx.moveTo(x, gy)
+    ctx.lineTo(x + w - axisWidth, gy)
+    ctx.stroke()
+    drawText(ctx, num2.format(low + span * (1 - line / 4)), x + w, gy, { size: 22, mono: true, align: 'right', color: t.mutedForeground })
+  }
+  const slot = (w - axisWidth) / candles.length
+  candles.forEach((candle, index) => {
+    const cx = x + index * slot + slot / 2
+    const color = candle.close >= candle.open ? t.positive : t.negative
+    ctx.strokeStyle = color
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(cx, toY(candle.high))
+    ctx.lineTo(cx, toY(candle.low))
+    ctx.stroke()
+    const top = toY(Math.max(candle.open, candle.close))
+    ctx.fillStyle = color
+    ctx.fillRect(cx - slot * 0.3, top, slot * 0.6, Math.max(3, Math.abs(toY(candle.open) - toY(candle.close))))
+  })
+  ctx.setLineDash([10, 8])
+  ctx.strokeStyle = t.info
+  ctx.beginPath()
+  ctx.moveTo(x, toY(last))
+  ctx.lineTo(x + w - axisWidth, toY(last))
+  ctx.stroke()
+  ctx.setLineDash([])
+  fillRounded(ctx, x + w - axisWidth + 4, toY(last) - 18, axisWidth - 4, 36, 8, t.info)
+  drawText(ctx, num2.format(last), x + w - 8, toY(last), { size: 22, weight: 600, mono: true, align: 'right', color: t.primaryForeground })
+}
+
+function drawTradePage(panel, ctx, frame) {
+  const t = theme()
+  const quote = quoteOf(state.symbol)
+  const change = changeOf(quote)
+  drawText(ctx, quote.symbol, frame.x + 8, frame.y + 28, { size: 44, weight: 600 })
+  drawText(ctx, quote.name, frame.x + 8, frame.y + 74, { size: 24, color: t.mutedForeground })
+  drawText(ctx, `Bid ${num2.format(quote.last - 0.01)}   Ask ${num2.format(quote.last + 0.01)}   Vol ${int0.format(quote.volume / 1e6)}M`, frame.x + 8, frame.y + 108, {
+    size: 22, mono: true, color: t.mutedForeground,
+  })
+  drawText(ctx, num2.format(quote.last), frame.x + frame.w - 8, frame.y + 30, { size: 52, weight: 600, mono: true, align: 'right' })
+  drawText(ctx, `${num2.format(quote.last - quote.prevClose)}   ${pct2.format(change * 100)}%`, frame.x + frame.w - 8, frame.y + 82, {
+    size: 30, weight: 600, mono: true, align: 'right', color: signedColor(change),
+  })
+  PERIODS.forEach(([label], index) => {
+    drawButton(panel, `period:${label}`, frame.x + index * 140, frame.y + 132, 130, 56, label, {
+      variant: state.period === label ? 'primary' : 'outline', onClick: () => setPeriod(label),
+    })
+  })
+  drawCandles(ctx, frame.x, frame.y + 216, frame.w, frame.h - 216, candlesOf(quote, state.period), quote.last)
+}
+
+function drawPortfolioPage(panel, ctx, frame) {
+  const t = theme()
+  const summary = accountSummary()
+  const tiles = [
+    ['Net liquidation', usd0.format(summary.netLiq), t.foreground], ['Market value', usd0.format(summary.marketValue), t.foreground],
+    ['Day P&L', usd0.format(summary.dayPnl), signedColor(summary.dayPnl)], ['Buying power', usd0.format(summary.buyingPower), t.foreground],
+  ]
+  const tileWidth = (frame.w - 3 * 16) / 4
+  tiles.forEach(([label, value, color], index) => {
+    const x = frame.x + index * (tileWidth + 16)
+    drawCard(ctx, x, frame.y, tileWidth, 112)
+    drawText(ctx, label, x + 20, frame.y + 34, { size: 22, color: t.mutedForeground })
+    drawText(ctx, value, x + 20, frame.y + 78, { size: 34, weight: 600, mono: true, color })
+  })
+  const rows = positions.map((position) => {
+    const quote = quoteOf(position.symbol)
+    return {
+      id: position.symbol, symbol: position.symbol, quantity: position.quantity, avgCost: position.avgCost, last: quote.last,
+      value: position.quantity * quote.last, day: position.quantity * (quote.last - quote.prevClose),
+      pnl: position.quantity * (quote.last - position.avgCost),
+    }
+  })
+  drawCard(ctx, frame.x, frame.y + 132, frame.w, frame.h - 132)
+  drawTable(panel, frame.x + 8, frame.y + 140, frame.w - 16, [
+    { label: 'Symbol', share: 0.14, render: (row) => ({ text: row.symbol }) },
+    { label: 'Quantity', share: 0.12, align: 'right', mono: true, render: (row) => ({ text: int0.format(row.quantity) }) },
+    { label: 'Avg cost', share: 0.14, align: 'right', mono: true, render: (row) => ({ text: num2.format(row.avgCost) }) },
+    { label: 'Last', share: 0.14, align: 'right', mono: true, render: (row) => ({ text: num2.format(row.last) }) },
+    { label: 'Value', share: 0.16, align: 'right', mono: true, render: (row) => ({ text: usd0.format(row.value) }) },
+    { label: 'Day P&L', share: 0.14, align: 'right', mono: true, render: (row) => ({ text: usd0.format(row.day), color: signedColor(row.day) }) },
+    { label: 'Unrealized', share: 0.16, align: 'right', mono: true, render: (row) => ({ text: usd0.format(row.pnl), color: signedColor(row.pnl) }) },
+  ], rows, { idPrefix: 'position', rowHeight: 52, onRowClick: (row) => selectSymbol(row.symbol) })
+}
+
+function drawOrdersPage(panel, ctx, frame) {
+  const t = theme()
+  drawCard(ctx, frame.x, frame.y, frame.w, frame.h)
+  drawTable(panel, frame.x + 8, frame.y + 8, frame.w - 16, [
+    { label: 'Time (ET)', share: 0.14, mono: true, render: (row) => ({ text: row.time }) },
+    { label: 'Side', share: 0.1, render: (row) => ({ text: row.side, color: row.side === 'BUY' ? t.positive : t.negative }) },
+    { label: 'Symbol', share: 0.14, render: (row) => ({ text: row.symbol }) },
+    { label: 'Quantity', share: 0.14, align: 'right', mono: true, render: (row) => ({ text: int0.format(row.quantity) }) },
+    { label: 'Type', share: 0.1, render: (row) => ({ text: row.type }) },
+    { label: 'Price', share: 0.16, align: 'right', mono: true, render: (row) => ({ text: row.price === null ? 'Market' : num2.format(row.price) }) },
+    { label: 'Status', share: 0.22, render: (row) => ({ text: row.status, dot: row.status === 'Filled' ? t.positive : t.warning }) },
+  ], orders.slice(0, 9).map((order, index) => ({ ...order, id: `${order.time}-${index}` })), { idPrefix: 'order', rowHeight: 58 })
+}
+
+function drawMarketsPage(panel, ctx, frame) {
+  const t = theme()
+  const tileWidth = (frame.w - 5 * 12) / 6
+  MARKETS.forEach((market, index) => {
+    const x = frame.x + index * (tileWidth + 12)
+    const change = (market.value - market.open) / market.open
+    drawCard(ctx, x, frame.y, tileWidth, 150)
+    drawText(ctx, market.name, x + 16, frame.y + 32, { size: 22, color: t.mutedForeground, maxWidth: tileWidth - 24 })
+    drawText(ctx, market.value.toLocaleString('en-US', { minimumFractionDigits: market.decimals, maximumFractionDigits: market.decimals }), x + 16, frame.y + 76, {
+      size: 28, weight: 600, mono: true, maxWidth: tileWidth - 24,
+    })
+    drawText(ctx, `${pct2.format(change * 100)}%`, x + 16, frame.y + 118, { size: 24, weight: 600, mono: true, color: signedColor(change) })
+  })
+  drawText(ctx, 'Sectors', frame.x + 8, frame.y + 190, { size: 26, weight: 600 })
+  const columns = 4
+  const heatWidth = (frame.w - (columns - 1) * 12) / columns
+  const heatHeight = (frame.h - 230 - 2 * 12) / 3
+  SECTORS.forEach((sector, index) => {
+    const x = frame.x + (index % columns) * (heatWidth + 12)
+    const y = frame.y + 220 + Math.floor(index / columns) * (heatHeight + 12)
+    fillRounded(ctx, x, y, heatWidth, heatHeight, 16, t.card, t.border)
+    ctx.globalAlpha = Math.min(0.75, Math.abs(sector.change) / 2.2 + 0.12)
+    fillRounded(ctx, x, y, heatWidth, heatHeight, 16, signedColor(sector.change))
+    ctx.globalAlpha = 1
+    drawText(ctx, sector.name, x + 20, y + heatHeight / 2 - 18, { size: 26, weight: 600, color: '#ffffff', maxWidth: heatWidth - 30 })
+    drawText(ctx, `${pct2.format(sector.change)}%`, x + 20, y + heatHeight / 2 + 22, { size: 26, mono: true, color: '#ffffff' })
+  })
+}
+
+function drawNewsPage(panel, ctx, frame) {
+  const t = theme()
+  drawCard(ctx, frame.x, frame.y, frame.w, frame.h)
+  NEWS.forEach((item, index) => {
+    const y = frame.y + 20 + index * 82
+    ctx.font = fontFor(22, 700, false)
+    const chip = ctx.measureText(item.tag).width + 32
+    fillRounded(ctx, frame.x + 24, y + 6, chip, 44, 12, item.color)
+    drawText(ctx, item.tag, frame.x + 24 + chip / 2, y + 28, { size: 22, weight: 700, color: '#0b0e14', align: 'center' })
+    drawText(ctx, item.text, frame.x + 24 + chip + 20, y + 28, { size: 28, maxWidth: frame.w - chip - 200 })
+    drawText(ctx, `${3 + index * 7}m ago`, frame.x + frame.w - 24, y + 28, { size: 22, color: t.mutedForeground, align: 'right' })
+  })
+}
+
+function drawMenuPage(panel, ctx, frame) {
+  const t = theme()
+  const summary = accountSummary()
+  drawCard(ctx, frame.x, frame.y, frame.w * 0.5 - 8, frame.h, 'Account')
+  const rows = [
+    ['Account', `${account.id} (paper)`], ['Net liquidation', usd2.format(summary.netLiq)], ['Cash', usd2.format(summary.cash)],
+    ['Buying power', usd2.format(summary.buyingPower)], ['Open positions', String(positions.length)], ['Open orders', String(orders.filter((order) => order.status === 'Working').length)],
+  ]
+  rows.forEach(([label, value], index) => {
+    const y = frame.y + 96 + index * 58
+    drawText(ctx, label, frame.x + 28, y, { size: 24, color: t.mutedForeground })
+    drawText(ctx, value, frame.x + frame.w * 0.5 - 36, y, { size: 24, mono: true, align: 'right' })
+  })
+  drawText(ctx, 'Unofficial mock. Example data, nothing is sent.', frame.x + 28, frame.y + frame.h - 40, { size: 22, color: t.mutedForeground })
+  const rightX = frame.x + frame.w * 0.5 + 8
+  const buttonWidth = frame.w * 0.5 - 8
+  drawCard(ctx, rightX, frame.y, buttonWidth, frame.h, 'View')
+  const buttons = [
+    ['menu:theme', state.theme === 'dark' ? 'Theme: Dark' : 'Theme: Light', toggleTheme],
+    ['menu:seated', state.seated ? 'Seated: On' : 'Seated: Off', toggleSeated],
+    ['menu:recenter', 'Recenter', recenter],
+    ['menu:reset', 'Reset layout', resetLayout],
+  ]
+  buttons.forEach(([id, label, onClick], index) => {
+    drawButton(panel, id, rightX + 28, frame.y + 76 + index * 88, buttonWidth - 56, 72, label, { variant: 'outline', onClick })
+  })
+}
+
+const PAGE_DRAWERS = {
+  trade: drawTradePage, portfolio: drawPortfolioPage, orders: drawOrdersPage, markets: drawMarketsPage, news: drawNewsPage, menu: drawMenuPage,
+}
+
+function drawStepper(panel, ctx, id, y, label, text, onStep) {
+  const t = theme()
+  drawText(ctx, label, 32, y + 20, { size: 22, color: t.mutedForeground })
+  drawButton(panel, `${id}:down`, 32, y + 40, 88, 72, '-', { variant: 'secondary', onClick: () => onStep(-1) })
+  drawText(ctx, text, panel.width / 2, y + 76, { size: 34, weight: 600, mono: true, align: 'center' })
+  drawButton(panel, `${id}:up`, panel.width - 120, y + 40, 88, 72, '+', { variant: 'secondary', onClick: () => onStep(1) })
+}
+
+function drawTicket(panel, ctx) {
+  const t = theme()
+  const quote = quoteOf(state.symbol)
+  const order = state.order
+  fillRounded(ctx, 0, 0, panel.width, panel.height, 28, t.sidebar, t.border)
+  drawText(ctx, 'Order ticket', 32, 64, { size: 34, weight: 600 })
+  drawText(ctx, `${quote.symbol}   ${num2.format(quote.last)}`, 32, 110, { size: 26, mono: true, color: t.mutedForeground })
+  const half = (panel.width - 64 - 12) / 2
+  drawButton(panel, 'ticket:buy', 32, 142, half, 72, 'Buy', { variant: order.side === 'BUY' ? 'primary' : 'outline', onClick: () => setSide('BUY') })
+  drawButton(panel, 'ticket:sell', 44 + half, 142, half, 72, 'Sell', { variant: order.side === 'SELL' ? 'destructive' : 'outline', onClick: () => setSide('SELL') })
+  drawButton(panel, 'ticket:type', 32, 232, panel.width - 64, 72, `Type: ${order.type === 'MKT' ? 'Market' : 'Limit'}`, { variant: 'secondary', onClick: cycleOrderType })
+  drawStepper(panel, ctx, 'ticket:quantity', 316, 'Quantity', int0.format(order.quantity), (direction) => adjustQuantity(direction * QUANTITY_STEP))
+  if (order.type === 'LMT') drawStepper(panel, ctx, 'ticket:limit', 446, 'Limit price', num2.format(order.limit), (direction) => adjustLimit(direction * LIMIT_STEP))
+  const price = order.type === 'MKT' ? quote.last : order.limit
+  drawText(ctx, 'Estimated value', 32, 596, { size: 22, color: t.mutedForeground })
+  drawText(ctx, usd2.format(price * order.quantity), panel.width - 32, 596, { size: 28, weight: 600, mono: true, align: 'right' })
+  drawText(ctx, `Commission ${usd2.format(COMMISSION)} (example)`, 32, 640, { size: 22, color: t.mutedForeground })
+  drawButton(panel, 'ticket:submit', 32, 668, panel.width - 64, 80, 'Submit paper order', {
+    variant: order.side === 'BUY' ? 'primary' : 'destructive', disabled: order.quantity <= 0, hold: { ms: HOLD_MS, onConfirm: submitOrder },
+  })
+  drawText(ctx, 'Paper mock: nothing is sent', panel.width / 2, 790, { size: 22, color: t.mutedForeground, align: 'center' })
+}
+
+
+/* ---------- scene ---------- */
+
+const renderer = new THREE.WebGLRenderer({ antialias: true })
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+renderer.setSize(window.innerWidth, window.innerHeight)
+renderer.xr.enabled = true
+renderer.xr.setReferenceSpaceType('local-floor')
+renderer.xr.setFoveation(1)
+document.body.appendChild(renderer.domElement)
+
+const scene = new THREE.Scene()
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 50)
+camera.position.set(0, EYE_HEIGHT, 0)
+camera.rotation.order = 'YXZ'
+scene.add(camera)
+scene.add(new THREE.AmbientLight(0xffffff, 0.9))
+const sun = new THREE.DirectionalLight(0xffffff, 1.4)
+sun.position.set(1, 3, 2)
+scene.add(sun)
+
+const rig = new THREE.Group()
+scene.add(rig)
+
+const floorRing = new THREE.Mesh(
+  new THREE.RingGeometry(1.0, 1.05, 128),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
+)
+floorRing.rotation.x = -Math.PI / 2
+floorRing.position.y = 0.01
+rig.add(floorRing)
+const floorGlow = new THREE.Mesh(
+  new THREE.CircleGeometry(1.05, 64),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.06, side: THREE.DoubleSide }),
+)
+floorGlow.rotation.x = -Math.PI / 2
+floorGlow.position.y = 0.005
+rig.add(floorGlow)
+
+const panels = {
+  topBar: new Panel('top bar', 2.6, 0.22, drawTopBar).place(0, 2.28),
+  watchlist: new Panel('watchlist', 0.8, 1.4, drawWatchlist).place(-48, 1.45),
+  board: new Panel('board', 2.2, 1.4, drawBoard).place(0, 1.45),
+  ticket: new Panel('ticket', 0.9, 1.4, drawTicket).place(50, 1.45),
+  deck: new Panel('deck', 1.0, 0.5, drawDeck).place(0, 0.62, 0.42),
+}
+for (const panel of Object.values(panels)) rig.add(panel.mesh)
+
+function invalidateAll() {
+  for (const panel of Object.values(panels)) panel.dirty = true
+}
+
+function currentLayout() {
+  return Object.fromEntries(
+    Object.entries(panels).map(([key, panel]) => [key, { angle: panel.angle, centerHeight: panel.centerHeight }]),
+  )
+}
+
+const defaultLayout = currentLayout()
+
+function saveLayout() {
+  try {
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(currentLayout()))
+  } catch (error) {
+    console.warn(`Panel layout was not saved to localStorage, it is kept for this page only: ${error.message}`)
+  }
+}
+
+function loadLayout() {
+  let saved = null
+  try {
+    saved = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) ?? 'null')
+  } catch (error) {
+    console.warn(`Saved panel layout was ignored because it could not be read: ${error.message}`)
+  }
+  if (!saved) return
+  for (const [key, panel] of Object.entries(panels)) {
+    const entry = saved[key]
+    if (Number.isFinite(entry?.angle) && Number.isFinite(entry?.centerHeight)) panel.place(entry.angle, entry.centerHeight)
+  }
+}
+
+function resetLayout() {
+  for (const [key, panel] of Object.entries(panels)) panel.place(defaultLayout[key].angle, defaultLayout[key].centerHeight)
+  try {
+    localStorage.removeItem(LAYOUT_STORAGE_KEY)
+  } catch (error) {
+    console.warn(`Saved panel layout was not removed from localStorage: ${error.message}`)
+  }
+  invalidateAll()
+}
+
+const snapTo = (value, step) => Math.round(value / step) * step
+
+function halfWidthDegrees(panel) {
+  return THREE.MathUtils.radToDeg(Math.atan(panel.widthMeters / 2 / panel.radius))
+}
+
+function panelsOverlap(panel, angle, centerHeight, other) {
+  if (panel.radius !== other.radius) return false
+  const angleGap = Math.abs(angle - other.angle) - halfWidthDegrees(panel) - halfWidthDegrees(other)
+  const heightGap = Math.abs(centerHeight - other.centerHeight) - (panel.heightMeters + other.heightMeters) / 2
+  return angleGap < PANEL_GAP_DEGREES && heightGap < 0
+}
+
+// Tries the requested spot first, then each axis alone, so a panel slides along a neighbor instead of sticking to it.
+function movePanel(panel, angle, centerHeight) {
+  const targetAngle = THREE.MathUtils.clamp(angle, -MAX_ANGLE_DEGREES, MAX_ANGLE_DEGREES)
+  const targetHeight = THREE.MathUtils.clamp(centerHeight, MIN_PANEL_CENTER_HEIGHT, MAX_PANEL_CENTER_HEIGHT)
+  const others = Object.values(panels).filter((other) => other !== panel)
+  const candidates = [[targetAngle, targetHeight], [targetAngle, panel.centerHeight], [panel.angle, targetHeight]]
+  const free = candidates.find(([a, h]) => !others.some((other) => panelsOverlap(panel, a, h, other)))
+  if (free) panel.place(free[0], free[1])
+}
+
+loadLayout()
+
+/* ---------- stage: a holographic table that hosts the 3D scenes ---------- */
+
+const STAGE_ANCHOR_Z = -1.1
+const HOME_ZOOM = 1.3
+const LABEL_BACKING = 'rgba(8,10,16,0.72)'
+const GHOST_HIDDEN_BELOW = 0.03
+const UNIT_LABEL_WORLD_WIDTH = 0.6
+const UNIT_LABEL_WORLD_HEIGHT = 0.18
+const BUILDING_LABEL_WORLD_WIDTH = 0.26
+const BUILDING_LABEL_WORLD_HEIGHT = 0.07
+const stage = new THREE.Group()
+rig.add(stage)
+const effectTime = { value: 0 }
+
+const GLOW_VERTEX = `
+varying vec3 vLocal;
+varying vec3 vWorld;
+varying vec2 vUv;
+void main() {
+  vLocal = position;
+  vUv = uv;
+  vec4 world = modelMatrix * vec4(position, 1.0);
+  vWorld = world.xyz;
+  gl_Position = projectionMatrix * viewMatrix * world;
+}`
+
+const BAR_FRAGMENT = `
+uniform float uTime;
+uniform vec3 uColorLow;
+uniform vec3 uColorHigh;
+uniform float uAlpha;
+uniform float uFlip;
+varying vec3 vLocal;
+varying vec3 vWorld;
+varying vec2 vUv;
+void main() {
+  float g = clamp(vLocal.y + 0.5, 0.0, 1.0);
+  g = mix(g, 1.0 - g, uFlip);
+  vec3 color = mix(uColorLow, uColorHigh, g);
+  float scan = pow(0.5 + 0.5 * sin(vWorld.y * 120.0 - uTime * 4.0 + vWorld.x * 20.0), 8.0);
+  float shimmer = 0.75 + 0.25 * sin(uTime * 2.0 + vWorld.x * 40.0 + vWorld.z * 40.0);
+  float alpha = uAlpha * (0.35 + 0.65 * g) * shimmer + scan * 0.4 * uAlpha;
+  gl_FragColor = vec4(color + scan * 0.5, clamp(alpha, 0.0, 1.0));
+}`
+
+const RIPPLE_FRAGMENT = `
+uniform float uTime;
+uniform vec3 uColor;
+uniform float uAlpha;
+uniform float uRadius;
+varying vec3 vLocal;
+void main() {
+  float r = length(vLocal.xy);
+  float wave = 0.5 + 0.5 * sin(r * 80.0 - uTime * 2.5);
+  float ring = smoothstep(0.85, 1.0, wave);
+  float fade = 1.0 - smoothstep(0.0, uRadius, r);
+  gl_FragColor = vec4(uColor, (ring * 0.6 + 0.07) * fade * uAlpha);
+}`
+
+function createBarMaterial(low, high, flip) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: effectTime,
+      uColorLow: { value: new THREE.Color(low) },
+      uColorHigh: { value: new THREE.Color(high) },
+      uAlpha: { value: 0.9 },
+      uFlip: { value: flip ? 1 : 0 },
+    },
+    vertexShader: GLOW_VERTEX,
+    fragmentShader: BAR_FRAGMENT,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  })
+}
+
+function setBarColors(material, low, high) {
+  material.uniforms.uColorLow.value.copy(low)
+  material.uniforms.uColorHigh.value.copy(high)
+}
+
+function createRippleMaterial(color, radius, alpha) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: effectTime,
+      uColor: { value: new THREE.Color(color) },
+      uAlpha: { value: alpha },
+      uRadius: { value: radius },
+    },
+    vertexShader: GLOW_VERTEX,
+    fragmentShader: RIPPLE_FRAGMENT,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  })
+}
+
+function createGlowTexture() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 128
+  canvas.height = 128
+  const ctx = canvas.getContext('2d')
+  const gradient = ctx.createRadialGradient(64, 64, 0, 64, 64, 64)
+  gradient.addColorStop(0, 'rgba(255,255,255,1)')
+  gradient.addColorStop(0.25, 'rgba(255,255,255,0.45)')
+  gradient.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, 128, 128)
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  return texture
+}
+
+const glowTexture = createGlowTexture()
+
+function createGlow(color, size) {
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTexture, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  }))
+  sprite.scale.set(size, size, 1)
+  return sprite
+}
+
+function createLabelSprite(width, height, canvasWidth, canvasHeight) {
+  const canvas = document.createElement('canvas')
+  canvas.width = canvasWidth
+  canvas.height = canvasHeight
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }))
+  sprite.scale.set(width, height, 1)
+  sprite.renderOrder = 10
+  return { sprite, canvas, texture }
+}
+
+function drawLabel(label, lines, { fill, color, secondary = color }) {
+  const ctx = label.canvas.getContext('2d')
+  const { width, height } = label.canvas
+  ctx.clearRect(0, 0, width, height)
+  if (fill) fillRounded(ctx, 4, 4, width - 8, height - 8, 20, fill)
+  const rows = Array.isArray(lines) ? lines : [lines]
+  rows.forEach((text, index) => {
+    drawText(ctx, text, width / 2, (height * (index + 0.5)) / rows.length, {
+      size: Math.min(34, (height / rows.length) * 0.7), weight: index === 0 ? 600 : 500,
+      color: index === 0 ? color : secondary, align: 'center', maxWidth: width - 24,
+    })
+  })
+  label.texture.needsUpdate = true
+}
+
+function createStarfield() {
+  const count = 1400
+  const positions = new Float32Array(count * 3)
+  for (let i = 0; i < count; i++) {
+    const radius = 7 + random() * 4
+    const theta = random() * Math.PI * 2
+    const phi = Math.acos(2 * random() - 1)
+    positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta)
+    positions[i * 3 + 1] = Math.abs(radius * Math.cos(phi)) + 0.2
+    positions[i * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta)
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  const points = new THREE.Points(geometry, new THREE.PointsMaterial({
+    size: 0.08, map: glowTexture, color: 0x9db4ff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  }))
+  points.frustumCulled = false
+  return points
+}
+
+const stars = createStarfield()
+rig.add(stars)
+
+const tooltip = createLabelSprite(0.5, 0.1, 736, 150)
+tooltip.sprite.visible = false
+rig.add(tooltip.sprite)
+
+const unitBox = new THREE.BoxGeometry(1, 1, 1)
+
+function itemFromHit(hit) {
+  const { item, instanceItems, faceItems, faceDivisor } = hit.object.userData
+  if (instanceItems) return instanceItems[hit.instanceId]
+  if (faceItems) return faceItems[Math.floor(hit.faceIndex / faceDivisor)]
+  return item
+}
+
+class StageScene {
+  constructor() {
+    this.group = new THREE.Group()
+    this.group.visible = false
+    stage.add(this.group)
+    this.interactives = []
+    this.view = { scale: 1, position: new THREE.Vector3() }
+    this.goal = { point: new THREE.Vector3(), scale: 1, anchorY: 0.9, anchorZ: STAGE_ANCHOR_Z }
+    this.snap = true
+  }
+
+  focusOn(point, scale, anchorY, anchorZ = STAGE_ANCHOR_Z) {
+    this.goal.point.copy(point)
+    this.goal.scale = scale
+    this.goal.anchorY = anchorY
+    this.goal.anchorZ = anchorZ
+    invalidateAll()
+  }
+
+  updateView(deltaSeconds) {
+    const goalPosition = new THREE.Vector3(0, this.goal.anchorY, this.goal.anchorZ).addScaledVector(this.goal.point, -this.goal.scale)
+    const blend = this.snap ? 1 : 1 - Math.exp(-deltaSeconds * 4.5)
+    this.snap = false
+    this.view.scale += (this.goal.scale - this.view.scale) * blend
+    this.view.position.lerp(goalPosition, blend)
+    this.group.scale.setScalar(this.view.scale)
+    this.group.position.copy(this.view.position)
+  }
+
+  addInteractive(mesh, item) {
+    item.object = mesh
+    mesh.userData.item = item
+    this.interactives.push(mesh)
+    return mesh
+  }
+}
+
+/* ---------- the sky: a market halo above the user ---------- */
+
+const SKY_NEWS_RADIUS = 1.6
+const SKY_NEWS_Y = 3.2
+const SKY_INDEX_RADIUS = 1.9
+const SKY_INDEX_Y = 2.78
+const NEWS_SPEED = 0.04
+const INDEX_SPEED = 0.025
+const NEWS_CANVAS_WIDTH = 8192
+const NEWS_CANVAS_HEIGHT = 192
+const NEWS_BAND_HEIGHT = 0.2356
+const INDEX_CANVAS_WIDTH = 4096
+const INDEX_CANVAS_HEIGHT = 224
+const INDEX_BAND_HEIGHT = 0.3265
+const INDEX_COPIES_AROUND = 2
+const SKY_BACKING = 'rgba(8,10,16,0.55)'
+const SPARKLINE_POINTS = 24
+const MARKET_UP_COLOR = '#52e0a4'
+const MARKET_DOWN_COLOR = '#ff6b8a'
+
+const MARKETS = [
+  { name: 'S&P 500', value: 5812.4, decimals: 1, volatility: 0.0007 },
+  { name: 'Nasdaq 100', value: 20214.8, decimals: 1, volatility: 0.0009 },
+  { name: 'Dow', value: 43150.2, decimals: 1, volatility: 0.0006 },
+  { name: 'Russell 2000', value: 2290.6, decimals: 1, volatility: 0.0010 },
+  { name: 'VIX', value: 15.2, decimals: 2, volatility: 0.004 },
+  { name: 'US 10Y', value: 4.31, decimals: 2, volatility: 0.0015, suffix: '%' },
+].map((market) => ({ ...market, open: market.value, series: Array.from({ length: SPARKLINE_POINTS }, () => market.value) }))
+
+const NEWS = [
+  { tag: 'EXAMPLE', color: '#8892a6', text: 'Sample headlines for the mock, not real news' },
+  { tag: 'MACRO', color: '#4f8cff', text: 'Policy makers signal patience as inflation cools' },
+  { tag: 'TECH', color: '#9a6bff', text: 'Chipmakers lead the rally as earnings beat estimates' },
+  { tag: 'ENERGY', color: '#f2a33a', text: 'Crude slips on a surprise build in inventories' },
+  { tag: 'RISK', color: '#ff5d7a', text: 'Volatility index drifts lower into the close' },
+  { tag: 'FX', color: '#2fc4d9', text: 'Dollar steadies as yields hold near recent range' },
+  { tag: 'EARNINGS', color: '#3ecf8e', text: 'Banks report higher trading revenue for the quarter' },
+]
+
+const percentFormat = new Intl.NumberFormat('en-US', { signDisplay: 'always', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+function createSkyRing(radius, y, canvasWidth, canvasHeight, repeat, bandHeight) {
+  const canvas = document.createElement('canvas')
+  canvas.width = canvasWidth
+  canvas.height = canvasHeight
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.wrapS = THREE.RepeatWrapping
+  texture.repeat.x = repeat
+  texture.anisotropy = 4
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius, radius, bandHeight, 128, 1, true),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.BackSide, depthWrite: false, toneMapped: false }),
+  )
+  mesh.scale.x = -1
+  mesh.position.y = y
+  rig.add(mesh)
+  return { canvas, ctx: canvas.getContext('2d'), texture, mesh }
+}
+
+function drawNewsRing(ring) {
+  const { ctx, canvas } = ring
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.fillStyle = SKY_BACKING
+  ctx.fillRect(0, 24, canvas.width, canvas.height - 48)
+  const items = NEWS.map((item) => {
+    ctx.font = fontFor(24, 700, false)
+    const chip = ctx.measureText(item.tag).width + 36
+    ctx.font = fontFor(38, 600, false)
+    return { item, chip, text: ctx.measureText(item.text).width }
+  })
+  const used = items.reduce((sum, entry) => sum + entry.chip + 16 + entry.text, 0)
+  const gap = (canvas.width - used) / items.length
+  let x = gap / 2
+  for (const { item, chip, text } of items) {
+    fillRounded(ctx, x, canvas.height / 2 - 22, chip, 44, 12, item.color)
+    drawText(ctx, item.tag, x + chip / 2, canvas.height / 2, { size: 24, weight: 700, color: '#0b0e14', align: 'center' })
+    drawText(ctx, item.text, x + chip + 16, canvas.height / 2, { size: 38, weight: 600, color: '#ffffff' })
+    ctx.beginPath()
+    ctx.arc(x + chip + 16 + text + gap / 2, canvas.height / 2, 6, 0, Math.PI * 2)
+    ctx.fillStyle = 'rgba(255,255,255,0.45)'
+    ctx.fill()
+    x += chip + 16 + text + gap
+  }
+  ring.texture.needsUpdate = true
+}
+
+function drawIndexRing(ring) {
+  const { ctx, canvas } = ring
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.fillStyle = SKY_BACKING
+  ctx.fillRect(0, 28, canvas.width, canvas.height - 56)
+  const tileWidth = canvas.width / MARKETS.length
+  MARKETS.forEach((market, index) => {
+    const x = index * tileWidth
+    const change = (market.value - market.open) / market.open
+    const color = change >= 0 ? MARKET_UP_COLOR : MARKET_DOWN_COLOR
+    const value = market.value.toLocaleString('en-US', { minimumFractionDigits: market.decimals, maximumFractionDigits: market.decimals })
+    drawText(ctx, market.name, x + 36, 64, { size: 30, weight: 600, color: '#c9d3e6' })
+    drawText(ctx, `${value}${market.suffix ?? ''}`, x + 36, 118, { size: 52, weight: 600, mono: true, color: '#ffffff' })
+    drawText(ctx, `${percentFormat.format(change * 100)}%`, x + 36, 172, { size: 34, weight: 600, mono: true, color })
+    const low = Math.min(...market.series)
+    const span = Math.max(...market.series) - low || 1
+    ctx.beginPath()
+    market.series.forEach((point, pointIndex) => {
+      const px = x + 380 + (pointIndex / (SPARKLINE_POINTS - 1)) * (tileWidth - 440)
+      const py = 176 - ((point - low) / span) * 100
+      if (pointIndex === 0) ctx.moveTo(px, py)
+      else ctx.lineTo(px, py)
+    })
+    ctx.strokeStyle = color
+    ctx.lineWidth = 5
+    ctx.lineJoin = 'round'
+    ctx.stroke()
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'
+    ctx.fillRect(x + tileWidth - 2, 52, 2, canvas.height - 104)
+  })
+  ring.texture.needsUpdate = true
+}
+
+function stepMarkets() {
+  for (const market of MARKETS) {
+    market.value *= 1 + between(-market.volatility, market.volatility)
+    market.series.push(market.value)
+    market.series.shift()
+  }
+}
+
+function createSky() {
+  const news = createSkyRing(SKY_NEWS_RADIUS, SKY_NEWS_Y, NEWS_CANVAS_WIDTH, NEWS_CANVAS_HEIGHT, 1, NEWS_BAND_HEIGHT)
+  const indices = createSkyRing(SKY_INDEX_RADIUS, SKY_INDEX_Y, INDEX_CANVAS_WIDTH, INDEX_CANVAS_HEIGHT, INDEX_COPIES_AROUND, INDEX_BAND_HEIGHT)
+  drawNewsRing(news)
+  drawIndexRing(indices)
+  let lastStep = 0
+  return {
+    update(deltaSeconds, elapsed) {
+      news.mesh.rotation.y += NEWS_SPEED * deltaSeconds
+      indices.mesh.rotation.y -= INDEX_SPEED * deltaSeconds
+      if (elapsed - lastStep < 1) return
+      lastStep = elapsed
+      stepMarkets()
+      drawIndexRing(indices)
+    },
+  }
+}
+
+const sky = createSky()
+
+
+/* ---------- the portfolio constellation ---------- */
+
+const ORBIT_RADII = [0.2, 0.32, 0.44, 0.56]
+const ORBS_PER_RING = 3
+const ORB_ZOOM = 3.6
+const PORTFOLIO_HOME_ZOOM = 1.5
+const CORE_HEIGHT = 0.12
+const CORE_RADIUS = 0.045
+const BEAM_FULL_SCALE = 300000
+const FLASH_SECONDS = 1.2
+const NEUTRAL_ORB_COLOR = 0x5b6b8c
+const orbGeometry = new THREE.SphereGeometry(1, 28, 18)
+
+class PortfolioScene extends StageScene {
+  constructor() {
+    super()
+    this.level = 'portfolio'
+    this.followed = null
+    this.sizeMode = 'value'
+    this.flashes = []
+    this.colors = { positive: new THREE.Color(), negative: new THREE.Color(), neutral: new THREE.Color(NEUTRAL_ORB_COLOR) }
+    this.buildFloor()
+    this.buildCore()
+    this.buildOrbs()
+    this.home()
+  }
+
+  buildFloor() {
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(0.75, 96), createRippleMaterial(0x5998f5, 0.75, 0.4))
+    floor.rotation.x = -Math.PI / 2
+    floor.position.y = 0.0005
+    this.group.add(floor)
+    for (const radius of ORBIT_RADII) {
+      const trail = new THREE.Mesh(
+        new THREE.TorusGeometry(radius, 0.0015, 6, 128),
+        new THREE.MeshBasicMaterial({ color: 0x83b2f7, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending }),
+      )
+      trail.rotation.x = Math.PI / 2
+      trail.position.y = CORE_HEIGHT
+      this.group.add(trail)
+    }
+  }
+
+  buildCore() {
+    this.core = new THREE.Mesh(new THREE.SphereGeometry(CORE_RADIUS, 32, 24), new THREE.MeshStandardMaterial({ emissiveIntensity: 1.1, roughness: 0.3 }))
+    this.core.position.y = CORE_HEIGHT
+    this.group.add(this.core)
+    this.coreGlow = createGlow(0xffffff, 0.3)
+    this.coreGlow.position.y = CORE_HEIGHT
+    this.group.add(this.coreGlow)
+    this.beam = new THREE.Mesh(unitBox, createBarMaterial(0xffffff, 0xffffff, false))
+    this.beam.scale.set(0.006, 0.2, 0.006)
+    this.group.add(this.beam)
+  }
+
+  buildOrbs() {
+    const heldValue = (quote) => Math.abs((positions.find((position) => position.symbol === quote.symbol)?.quantity ?? 0) * quote.last)
+    const ordered = [...quotes].sort((a, b) => heldValue(b) - heldValue(a))
+    this.orbs = ordered.map((quote, index) => {
+      const ring = Math.min(ORBIT_RADII.length - 1, Math.floor(index / ORBS_PER_RING))
+      const group = new THREE.Group()
+      const mesh = new THREE.Mesh(orbGeometry, new THREE.MeshStandardMaterial({ roughness: 0.25, metalness: 0.1, emissiveIntensity: 0.9 }))
+      group.add(mesh)
+      const label = createLabelSprite(0.2, 0.075, 320, 120)
+      group.add(label.sprite)
+      const flash = createGlow(0xffffff, 0.1)
+      flash.visible = false
+      group.add(flash)
+      this.group.add(group)
+      const item = { type: 'symbol', symbol: quote.symbol, object: group }
+      mesh.userData.item = item
+      this.interactives.push(mesh)
+      return {
+        quote, group, mesh, label, flash, ring, item, size: 0.02, height: CORE_HEIGHT + 0.02 * ring - 0.02,
+        angle0: ((index % ORBS_PER_RING) / ORBS_PER_RING) * Math.PI * 2 + ring * 0.9, speed: (ring % 2 ? -1 : 1) * (0.16 - ring * 0.025),
+      }
+    })
+  }
+
+  orbOf(symbol) {
+    return this.orbs.find((orb) => orb.quote.symbol === symbol)
+  }
+
+  metric(position) {
+    const quote = quoteOf(position.symbol)
+    return this.sizeMode === 'value' ? Math.abs(position.quantity * quote.last) : Math.abs(position.quantity * (quote.last - position.avgCost))
+  }
+
+  applyTheme() {
+    const t = theme()
+    this.colors.positive.set(t.positive)
+    this.colors.negative.set(t.negative)
+    this.refresh()
+  }
+
+  refresh() {
+    for (const orb of this.orbs) {
+      const change = changeOf(orb.quote)
+      drawLabel(orb.label, [orb.quote.symbol, `${pct2.format(change * 100)}%`], {
+        fill: LABEL_BACKING, color: '#ffffff', secondary: change >= 0 ? '#7fe3b0' : '#ff8a8f',
+      })
+    }
+  }
+
+  flash(symbol) {
+    const orb = this.orbOf(symbol)
+    if (orb) this.flashes.push({ orb, start: performance.now() / 1000 })
+  }
+
+  update(deltaSeconds, elapsed, hovered) {
+    this.updateView(deltaSeconds)
+    const blend = Math.min(1, deltaSeconds * 5)
+    const zoom = this.view.scale
+    const maxMetric = Math.max(1, ...positions.map((position) => this.metric(position)))
+    for (const orb of this.orbs) {
+      const position = positions.find((entry) => entry.symbol === orb.quote.symbol)
+      const selected = orb.quote.symbol === state.symbol
+      const target = position ? 0.018 + 0.036 * Math.sqrt(this.metric(position) / maxMetric) : 0.011
+      orb.size += (target - orb.size) * blend
+      const angle = orb.angle0 + elapsed * orb.speed
+      const radius = ORBIT_RADII[orb.ring]
+      orb.group.position.set(radius * Math.cos(angle), orb.height + 0.012 * Math.sin(elapsed * 1.3 + orb.angle0), radius * Math.sin(angle))
+      orb.mesh.scale.setScalar(orb.size * (selected ? 1.3 : 1) * (hovered === orb.item ? 1.2 : 1))
+      const color = position ? (changeOf(orb.quote) >= 0 ? this.colors.positive : this.colors.negative) : this.colors.neutral
+      orb.mesh.material.color.copy(color)
+      orb.mesh.material.emissive.copy(color)
+      orb.label.sprite.position.y = orb.size * 1.4 + 0.045 / zoom
+      orb.label.sprite.scale.set(0.26 / zoom, 0.1 / zoom, 1)
+    }
+    const summary = accountSummary()
+    const coreColor = summary.dayPnl >= 0 ? this.colors.positive : this.colors.negative
+    this.core.material.color.copy(coreColor)
+    this.core.material.emissive.copy(coreColor)
+    this.core.scale.setScalar(1 + 0.06 * Math.sin(elapsed * 2.4))
+    this.coreGlow.material.color.copy(coreColor)
+    const beamHeight = 0.08 + Math.min(1, Math.max(0, summary.netLiq) / BEAM_FULL_SCALE) * 0.3
+    this.beam.scale.y = beamHeight
+    this.beam.position.y = CORE_HEIGHT + CORE_RADIUS + beamHeight / 2
+    setBarColors(this.beam.material, coreColor.clone().multiplyScalar(0.4), coreColor)
+    this.flashes = this.flashes.filter(({ orb, start }) => {
+      const progress = (performance.now() / 1000 - start) / FLASH_SECONDS
+      orb.flash.visible = progress < 1
+      if (progress >= 1) return false
+      orb.flash.scale.setScalar(0.08 + progress * 0.5)
+      orb.flash.material.opacity = 1 - progress
+      orb.flash.material.color.copy(orb.mesh.material.color)
+      return true
+    })
+    if (this.followed) this.goal.point.copy(this.followed.group.position)
+  }
+
+  home() {
+    this.level = 'portfolio'
+    this.followed = null
+    this.focusOn(new THREE.Vector3(0, CORE_HEIGHT, 0), PORTFOLIO_HOME_ZOOM, 0.9)
+  }
+
+  focusOrb(orb) {
+    this.level = 'position'
+    this.followed = orb
+    this.focusOn(orb.group.position, ORB_ZOOM, 1.15, -1.15)
+  }
+
+  stepSymbol(delta) {
+    const index = quotes.findIndex((quote) => quote.symbol === state.symbol)
+    const next = quotes[(index + delta + quotes.length) % quotes.length]
+    selectSymbol(next.symbol)
+    if (this.followed) this.focusOrb(this.orbOf(next.symbol))
+  }
+
+  zoomIn(hovered) {
+    const orb = this.orbOf(hovered?.symbol ?? state.symbol)
+    selectSymbol(orb.quote.symbol)
+    this.focusOrb(orb)
+  }
+
+  zoomOut() { this.home() }
+
+  up() { this.stepSymbol(1) }
+
+  down() { this.stepSymbol(-1) }
+
+  previous() { this.stepSymbol(-1) }
+
+  next() { this.stepSymbol(1) }
+
+  cycleMode() {
+    this.sizeMode = this.sizeMode === 'value' ? 'pnl' : 'value'
+  }
+
+  modeLabel() {
+    return this.sizeMode === 'value' ? 'By value' : 'By P&L'
+  }
+
+  breadcrumb() {
+    const crumbs = [{ label: 'Portfolio', onClick: () => this.home() }]
+    if (this.followed) crumbs.push({ label: this.followed.quote.symbol, onClick: () => this.focusOrb(this.followed) })
+    return crumbs
+  }
+
+  describe(item) {
+    const quote = quoteOf(item.symbol)
+    const position = positions.find((entry) => entry.symbol === item.symbol)
+    if (!position) return [quote.symbol, quote.name]
+    return [quote.symbol, `${int0.format(position.quantity)} sh  ${usd0.format(position.quantity * (quote.last - position.avgCost))}`]
+  }
+
+  onClick(item) {
+    selectSymbol(item.symbol)
+    this.focusOrb(this.orbOf(item.symbol))
+  }
+}
+
+const portfolioScene = new PortfolioScene()
+let activeScene = portfolioScene
+
+function syncScene() {
+  portfolioScene.group.visible = true
+  refreshInteractives()
+}
+
+function refreshStageTheme() {
+  const t = theme()
+  scene.background = new THREE.Color(t.scene)
+  stars.visible = state.theme === 'dark'
+  floorRing.material.color.set(t.info)
+  floorGlow.material.color.set(t.info)
+  portfolioScene.applyTheme()
+}
+
+function drawDeck(panel, ctx) {
+  const t = theme()
+  fillRounded(ctx, 0, 0, panel.width, panel.height, 24, t.sidebar, t.border)
+  const crumbs = activeScene.breadcrumb()
+  let x = 24
+  crumbs.forEach((crumb, index) => {
+    const label = index === 0 ? crumb.label : `/ ${crumb.label}`
+    ctx.font = fontFor(22, 600, false)
+    const width = ctx.measureText(label).width + 16
+    const id = `crumb:${index}`
+    if (interaction.isHovered(panel, id)) fillRounded(ctx, x - 6, 52, width, 36, 10, t.hover)
+    drawText(ctx, label, x, 70, { size: 22, weight: 600, color: index === crumbs.length - 1 ? t.info : t.foreground })
+    panel.addRegion({ id, x: x - 6, y: 52, w: width, h: 36, onClick: crumb.onClick })
+    x += width + 4
+  })
+  const buttons = [
+    ['deck:in', 'Zoom in', () => activeScene.zoomIn(hoveredSceneItem())],
+    ['deck:out', 'Zoom out', () => activeScene.zoomOut()],
+    ['deck:up', 'Up', () => activeScene.up()],
+    ['deck:down', 'Down', () => activeScene.down()],
+    ['deck:previous', 'Previous', () => activeScene.previous()],
+    ['deck:next', 'Next', () => activeScene.next()],
+    ['deck:home', 'Home', () => activeScene.home()],
+    ['deck:mode', activeScene.modeLabel(), () => { activeScene.cycleMode(); invalidateAll() }],
+  ]
+  const buttonWidth = (panel.width - 40 - 30) / 4
+  buttons.forEach(([id, label, onClick], index) => {
+    drawButton(panel, id, 20 + (index % 4) * (buttonWidth + 10), 96 + Math.floor(index / 4) * 92, buttonWidth, 80, label, {
+      variant: index === 7 ? 'primary' : 'outline', onClick,
+    })
+  })
+}
+
+
+/* ---------- interaction ---------- */
+
+const raycaster = new THREE.Raycaster()
+const pointers = []
+let frameTime = performance.now()
+
+const interaction = {
+  isHovered(panel, id) {
+    return pointers.some((pointer) => pointer.target?.panel === panel && pointer.target.region?.id === id)
+  },
+  holdProgress(panel, id) {
+    for (const pointer of pointers) {
+      const pressed = pointer.pressTarget
+      if (pointer.holdStart !== null && pressed?.panel === panel && pressed.region?.id === id) {
+        return Math.min(1, (frameTime - pointer.holdStart) / pressed.region.hold.ms)
+      }
+    }
+    return 0
+  },
+  isDragged(panel) {
+    return pointers.some((pointer) => pointer.dragging?.panel === panel)
+  },
+}
+
+function createPointer(id, aim, haptic) {
+  const pointer = { id, aim, haptic, target: null, pressTarget: null, holdStart: null, distance: null, dragging: null }
+  pointers.push(pointer)
+  return pointer
+}
+
+function isVisibleInTree(object) {
+  for (let node = object; node; node = node.parent) if (!node.visible) return false
+  return true
+}
+
+function resolveTarget(hit) {
+  const panel = hit.object.userData.panel
+  if (panel) return { kind: 'panel', panel, region: panel.regionAt(hit.uv.x, hit.uv.y) }
+  return { kind: 'scene', item: itemFromHit(hit) }
+}
+
+function sameTarget(a, b) {
+  if (a === null || b === null) return a === b
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'scene') return a.item === b.item
+  return a.panel === b.panel && (a.region?.id ?? null) === (b.region?.id ?? null)
+}
+
+let interactiveMeshes = []
+
+function refreshInteractives() {
+  interactiveMeshes = [...Object.values(panels).map((panel) => panel.mesh), ...activeScene.interactives]
+}
+
+function updatePointers() {
+  for (const pointer of pointers) {
+    if (!pointer.aim(raycaster)) {
+      pointer.target = null
+      pointer.distance = null
+      continue
+    }
+    const hit = raycaster.intersectObjects(interactiveMeshes, false).find((candidate) => isVisibleInTree(candidate.object))
+    const next = hit ? resolveTarget(hit) : null
+    pointer.distance = hit ? hit.distance : null
+    if (sameTarget(pointer.target, next)) continue
+    for (const target of [pointer.target, next]) if (target?.kind === 'panel') target.panel.dirty = true
+    pointer.target = next
+    if ((next?.region && !next.region.disabled) || next?.kind === 'scene') pointer.haptic()
+  }
+}
+
+// The pointer ray, in rig space, where it crosses the vertical cylinder the panels sit on.
+function rayOnArc(pointer, radius) {
+  if (!pointer.aim(raycaster)) return null
+  const toRig = new THREE.Matrix4().copy(rig.matrixWorld).invert()
+  const origin = raycaster.ray.origin.clone().applyMatrix4(toRig)
+  const direction = raycaster.ray.direction.clone().transformDirection(toRig)
+  const a = direction.x ** 2 + direction.z ** 2
+  if (a < 1e-6) return null
+  const b = 2 * (origin.x * direction.x + origin.z * direction.z)
+  const c = origin.x ** 2 + origin.z ** 2 - radius ** 2
+  const discriminant = b * b - 4 * a * c
+  if (discriminant < 0) return null
+  const distance = (-b + Math.sqrt(discriminant)) / (2 * a)
+  if (distance <= 0) return null
+  const x = origin.x + distance * direction.x
+  const z = origin.z + distance * direction.z
+  return { angle: THREE.MathUtils.radToDeg(Math.atan2(x, -z)), height: origin.y + distance * direction.y }
+}
+
+function beginDrag(pointer, panel) {
+  pointer.pressTarget = null
+  pointer.holdStart = null
+  const grab = rayOnArc(pointer, panel.radius)
+  if (!grab) return
+  pointer.dragging = { panel, angleOffset: panel.angle - grab.angle, heightOffset: panel.centerHeight - grab.height }
+  panel.dirty = true
+}
+
+function updateDrags() {
+  for (const pointer of pointers) {
+    if (!pointer.dragging) continue
+    const { panel, angleOffset, heightOffset } = pointer.dragging
+    const grab = rayOnArc(pointer, panel.radius)
+    if (!grab) continue
+    movePanel(panel, snapTo(grab.angle + angleOffset, ANGLE_STEP_DEGREES), snapTo(grab.height + heightOffset, HEIGHT_STEP_METERS))
+  }
+}
+
+function pressStart(pointer) {
+  const region = pointer.target?.kind === 'panel' ? pointer.target.panel.regionById(pointer.target.region?.id) : null
+  if (region?.drag) {
+    beginDrag(pointer, pointer.target.panel)
+    return
+  }
+  pointer.pressTarget = pointer.target
+  pointer.holdStart = region?.hold ? frameTime : null
+}
+
+function pressEnd(pointer) {
+  if (pointer.dragging) {
+    updateDrags()
+    const { panel } = pointer.dragging
+    pointer.dragging = null
+    panel.dirty = true
+    saveLayout()
+    return
+  }
+  const started = pointer.pressTarget
+  const target = pointer.target
+  pointer.pressTarget = null
+  pointer.holdStart = null
+  if (started?.kind === 'panel') started.panel.dirty = true
+  if (!started || !sameTarget(started, target)) return
+  if (target.kind === 'scene') {
+    activeScene.onClick(target.item)
+    return
+  }
+  const region = target.panel.regionById(target.region?.id)
+  if (region?.onClick && !region.disabled) region.onClick()
+}
+
+function updateHolds() {
+  for (const pointer of pointers) {
+    if (pointer.holdStart === null) continue
+    const pressed = pointer.pressTarget
+    if (!sameTarget(pressed, pointer.target)) {
+      pointer.holdStart = null
+      pressed.panel.dirty = true
+      continue
+    }
+    pressed.panel.dirty = true
+    const region = pressed.panel.regionById(pressed.region.id)
+    if (region?.hold && frameTime - pointer.holdStart >= region.hold.ms) {
+      pointer.holdStart = null
+      pointer.pressTarget = null
+      region.hold.onConfirm()
+    }
+  }
+}
+
+const mouse = new THREE.Vector2()
+let mouseInside = false
+const mousePointer = createPointer('mouse', (ray) => {
+  if (!mouseInside || renderer.xr.isPresenting) return false
+  ray.setFromCamera(mouse, camera)
+  return true
+}, () => {})
+
+let lookDrag = null
+renderer.domElement.addEventListener('pointermove', (event) => {
+  mouseInside = true
+  mouse.set((event.clientX / window.innerWidth) * 2 - 1, -(event.clientY / window.innerHeight) * 2 + 1)
+  if (mousePointer.dragging) updateDrags()
+  if (lookDrag) {
+    camera.rotation.y -= (event.clientX - lookDrag.x) * 0.004
+    camera.rotation.x = THREE.MathUtils.clamp(camera.rotation.x - (event.clientY - lookDrag.y) * 0.004, -1.2, 1.2)
+    lookDrag = { x: event.clientX, y: event.clientY }
+  }
+})
+renderer.domElement.addEventListener('pointerleave', () => { mouseInside = false })
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  mouse.set((event.clientX / window.innerWidth) * 2 - 1, -(event.clientY / window.innerHeight) * 2 + 1)
+  mouseInside = true
+  updatePointers()
+  const target = mousePointer.target
+  if (event.button !== 0) {
+    if (target?.kind === 'panel') beginDrag(mousePointer, target.panel)
+  } else if (target) {
+    pressStart(mousePointer)
+  } else {
+    lookDrag = { x: event.clientX, y: event.clientY }
+  }
+})
+renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault())
+window.addEventListener('pointerup', () => {
+  lookDrag = null
+  if (mousePointer.pressTarget || mousePointer.dragging) pressEnd(mousePointer)
+})
+
+const controllers = []
+for (let index = 0; index < 2; index++) {
+  const controller = renderer.xr.getController(index)
+  let inputSource = null
+  const rayLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
+    new THREE.LineBasicMaterial({ color: 0xffffff }),
+  )
+  controller.add(rayLine)
+  scene.add(controller)
+  const pointer = createPointer(`controller-${index}`, (ray) => {
+    if (!controller.visible) return false
+    const origin = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld)
+    const direction = new THREE.Vector3(0, 0, -1).transformDirection(controller.matrixWorld)
+    ray.set(origin, direction)
+    return true
+  }, () => inputSource?.gamepad?.hapticActuators?.[0]?.pulse(0.25, 25))
+  controller.addEventListener('connected', (event) => {
+    inputSource = event.data
+    controller.userData.inputSource = event.data
+  })
+  controller.addEventListener('selectstart', () => pressStart(pointer))
+  controller.addEventListener('selectend', () => pressEnd(pointer))
+  controller.addEventListener('squeezestart', () => {
+    if (pointer.target?.kind === 'panel') beginDrag(pointer, pointer.target.panel)
+  })
+  controller.addEventListener('squeezeend', () => pressEnd(pointer))
+  controller.userData.rayLine = rayLine
+  controller.userData.pointer = pointer
+  controllers.push(controller)
+}
+
+
+/* ---------- actions ---------- */
+
+function setPage(page) {
+  state.page = page
+  invalidateAll()
+}
+
+function selectSymbol(symbol) {
+  state.symbol = symbol
+  state.order.limit = Math.round(quoteOf(symbol).last * 100) / 100
+  invalidateAll()
+}
+
+function setPeriod(period) {
+  state.period = period
+  invalidateAll()
+}
+
+function setSide(side) {
+  state.order.side = side
+  invalidateAll()
+}
+
+function cycleOrderType() {
+  state.order.type = ORDER_TYPES[(ORDER_TYPES.indexOf(state.order.type) + 1) % ORDER_TYPES.length]
+  invalidateAll()
+}
+
+function adjustQuantity(delta) {
+  state.order.quantity = Math.max(0, state.order.quantity + delta)
+  invalidateAll()
+}
+
+function adjustLimit(delta) {
+  state.order.limit = Math.max(0.01, Math.round((state.order.limit + delta) * 100) / 100)
+  invalidateAll()
+}
+
+function submitOrder() {
+  const { side, type, quantity, limit } = state.order
+  const quote = quoteOf(state.symbol)
+  const filled = type === 'MKT'
+  orders.unshift({
+    time: clockText(), side, symbol: quote.symbol, quantity, type, price: filled ? null : limit, status: filled ? 'Filled' : 'Working',
+  })
+  if (filled) applyFill(quote.symbol, side, quantity, quote.last)
+  portfolioScene.flash(quote.symbol)
+  showToast(`Paper ${side} ${int0.format(quantity)} ${quote.symbol} ${filled ? 'filled' : 'working'} (mock, nothing sent)`)
+}
+
+function toggleTheme() {
+  state.theme = state.theme === 'dark' ? 'light' : 'dark'
+  refreshStageTheme()
+  invalidateAll()
+}
+
+function toggleSeated() {
+  state.seated = !state.seated
+  rig.position.y = state.seated ? -0.35 : 0
+  invalidateAll()
+}
+
+function recenter() {
+  const head = new THREE.Vector3()
+  const forward = new THREE.Vector3()
+  camera.getWorldPosition(head)
+  camera.getWorldDirection(forward)
+  rig.position.x = head.x
+  rig.position.z = head.z
+  rig.rotation.y = Math.atan2(-forward.x, -forward.z)
+  invalidateAll()
+}
+
+/* ---------- frame loop ---------- */
+
+const statusLine = document.getElementById('vr-status')
+const startTime = performance.now()
+let lastFrameTime = startTime
+let lastTick = startTime
+let lastZoomTime = 0
+let tooltipText = ''
+let frameCount = 0
+let cpuMillis = 0
+let statsTime = startTime
+
+function hoveredSceneItem() {
+  return pointers.find((pointer) => pointer.target?.kind === 'scene')?.target.item ?? null
+}
+
+function updateTooltip(item) {
+  tooltip.sprite.visible = Boolean(item)
+  if (!item) {
+    tooltipText = ''
+    return
+  }
+  const lines = activeScene.describe(item)
+  const serialized = JSON.stringify(lines)
+  if (serialized !== tooltipText) {
+    tooltipText = serialized
+    drawLabel(tooltip, lines, { fill: theme().card, color: theme().foreground, secondary: theme().mutedForeground })
+  }
+  const position = item.object.getWorldPosition(new THREE.Vector3())
+  rig.worldToLocal(position)
+  position.y += 0.14
+  tooltip.sprite.position.copy(position)
+}
+
+function pollThumbsticks(now) {
+  if (now - lastZoomTime < 450) return
+  for (const controller of controllers) {
+    const axis = controller.userData.inputSource?.gamepad?.axes?.[3] ?? 0
+    if (Math.abs(axis) < 0.7) continue
+    if (axis < 0) activeScene.zoomIn(hoveredSceneItem())
+    else activeScene.zoomOut()
+    lastZoomTime = now
+    return
+  }
+}
+
+renderer.domElement.addEventListener('wheel', (event) => {
+  event.preventDefault()
+  const now = performance.now()
+  if (now - lastZoomTime < 250) return
+  lastZoomTime = now
+  if (event.deltaY < 0) activeScene.zoomIn(hoveredSceneItem())
+  else activeScene.zoomOut()
+}, { passive: false })
+
+function render() {
+  frameTime = performance.now()
+  const cpuStart = frameTime
+  if (frameTime - lastTick >= TICK_MS) {
+    lastTick = frameTime
+    tickQuotes()
+    for (const sector of SECTORS) sector.change += between(-0.04, 0.04)
+    portfolioScene.refresh()
+    invalidateAll()
+  }
+  updatePointers()
+  updateDrags()
+  updateHolds()
+
+  const elapsed = (frameTime - startTime) / 1000
+  const delta = Math.min(0.1, (frameTime - lastFrameTime) / 1000)
+  lastFrameTime = frameTime
+  effectTime.value = elapsed
+  stars.rotation.y = elapsed * 0.01
+  const hovered = hoveredSceneItem()
+  activeScene.update(delta, elapsed, hovered)
+  sky.update(delta, elapsed)
+  updateTooltip(hovered)
+  pollThumbsticks(frameTime)
+
+  for (const panel of Object.values(panels)) if (panel.dirty) panel.redraw()
+  for (const controller of controllers) {
+    const distance = controller.userData.pointer.distance
+    controller.userData.rayLine.scale.z = distance ?? 2.5
+    controller.userData.rayLine.material.color.set(distance === null ? 0x8a8f9c : 0xffffff)
+  }
+  const anyHover = pointers.some((pointer) => pointer.target?.region || pointer.target?.kind === 'scene')
+  const onHandle = pointers.some((pointer) => pointer.target?.region?.drag)
+  const dragging = pointers.some((pointer) => pointer.dragging) || lookDrag
+  renderer.domElement.style.cursor = dragging ? 'grabbing' : onHandle ? 'move' : anyHover ? 'pointer' : 'grab'
+  renderer.render(scene, camera)
+  frameCount += 1
+  cpuMillis += performance.now() - cpuStart
+  if (frameTime - statsTime >= 1000) {
+    const { calls, triangles } = renderer.info.render
+    statusLine.textContent = `${frameCount} fps, ${(cpuMillis / frameCount).toFixed(1)} ms cpu, ${calls} draw calls, ${Math.round(triangles / 1000)}k triangles`
+    frameCount = 0
+    cpuMillis = 0
+    statsTime = frameTime
+  }
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight
+  camera.updateProjectionMatrix()
+  renderer.setSize(window.innerWidth, window.innerHeight)
+})
+
+document.getElementById('notes-toggle').addEventListener('click', (event) => {
+  const body = document.getElementById('notes-body')
+  body.hidden = !body.hidden
+  event.target.textContent = body.hidden ? 'Show design notes' : 'Hide design notes'
+})
+
+renderer.xr.addEventListener('sessionstart', () => document.body.classList.add('in-vr'))
+renderer.xr.addEventListener('sessionend', () => document.body.classList.remove('in-vr'))
+
+const FONT_WAIT_MS = 2500
+await Promise.race([
+  Promise.all([document.fonts.load('600 24px Geist'), document.fonts.load('500 24px "Geist Mono"')]),
+  new Promise((resolve) => setTimeout(resolve, FONT_WAIT_MS)),
+])
+
+refreshStageTheme()
+syncScene()
+document.body.appendChild(VRButton.createButton(renderer))
+renderer.setAnimationLoop(render)
+</script>
+</body>
+</html>
