@@ -13,7 +13,8 @@ The page is served by GitHub Pages at <https://larytet.github.io/InteractiveBrok
 
 ## What is in the mock
 
-- The watchlist, a candlestick chart with periods, the order ticket, the portfolio, orders, markets, news and menu screens.
+- The watchlist, the order ticket, and the portfolio, orders, markets, news and menu screens.
+- Six 3D chart modes on the table for the selected symbol: candles with volume as depth, deviation from VWAP, five layered days, an order book terrain, an implied volatility surface and a yield curve.
 - A portfolio constellation on the table: every symbol is an orb orbiting the account core, held positions are larger, and a paper order sends a pulse through its orb.
 - A sky above the user with the major indices and a news feed, both example data on a timer.
 - Hold-to-confirm on the submit button, large buttons and plus and minus steppers instead of sliders, and panels that can be dragged and are saved in the browser.
@@ -94,9 +95,13 @@ The practical route is the official API, which needs a running TWS or IB Gateway
 - [A guide to stock heat maps](https://www.redchip.com/education/what-are-stock-heat-maps).
 - Galaxy, city and orbit metaphors: Project-BlackHole, StockCity and this mock's portfolio constellation.
 
-## Ideas for a 3D price chart
+## 3D price chart modes
 
-These are design suggestions, not findings.
+The Trade tab implements candle depth as volume, deviation from VWAP in depth, five layered days with today on top, an order book terrain, an implied volatility surface and a yield curve.
+The order book, the surface and the curve use synthetic data, and the others are generated from example prices.
+Volume at price in depth and indicator sheets are not built yet.
+
+The ideas behind them are design suggestions, not findings.
 Keep time on X and price on Y, and spend the depth axis only on data that adds information.
 
 - **Volume at price in depth:** candles on the front plane, a slab behind each time slice showing how much traded at each price, with the most-traded price glowing.

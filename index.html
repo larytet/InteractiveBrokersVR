@@ -47,6 +47,17 @@ Center, the chart with periods, or the portfolio, orders, markets, news and menu
 Right, the order ticket.</li>
 <li>The top bar holds the account figures.</li>
 </ul>
+<h2>3D charts on the table</h2>
+<ul>
+<li>The Trade tab has six chart modes, and the chart stands on the table: look down.</li>
+<li>Candles: each candle is a box whose depth is the volume.
+VWAP: price floats in front of or behind the VWAP plane, in standard deviations.
+5 Days: five sessions layered in depth with today on top and still being drawn.</li>
+<li>Book: an order book terrain, time across, price into the depth, liquidity as height, traded volume as color.
+Vol and Yield: an implied volatility surface and a yield curve.
+The book, the surface and the curve are synthetic data.</li>
+<li>Press a candle to fly into it, use the mouse wheel to zoom, and the last deck button changes the mode.</li>
+</ul>
 <h2>Portfolio constellation</h2>
 <ul>
 <li>On the table, every watchlist symbol is an orb orbiting the account core.
@@ -126,6 +137,7 @@ const state = {
   seated: false,
   toast: '',
   toastUntil: 0,
+  chartMode: 'candles',
   order: { side: 'BUY', type: 'MKT', quantity: 100, limit: 228.4 },
 }
 
@@ -179,6 +191,7 @@ function buildCandles(quote, [label, count, volatility]) {
     const open = close * (1 + (rng() - 0.5) * 2 * volatility)
     list.unshift({
       open, close, high: Math.max(open, close) * (1 + rng() * volatility * 0.6), low: Math.min(open, close) * (1 - rng() * volatility * 0.6),
+      volume: 0.4 + rng() * 1.6 + (rng() > 0.93 ? 2 : 0),
     })
     close = open
   }
@@ -194,6 +207,56 @@ const changeOf = (quote) => (quote.last - quote.prevClose) / quote.prevClose
 const candlesOf = (quote, period) => {
   if (!quote.candles.has(period)) quote.candles.set(period, buildCandles(quote, PERIODS.find(([label]) => label === period)))
   return quote.candles.get(period)
+}
+
+const SESSION_POINTS = 78
+const SIGMA_LIMIT = 3
+const MIN_SIGMA_SHARE = 0.0004
+
+function vwapSeries(candles) {
+  let volume = 0
+  let priceVolume = 0
+  let squareVolume = 0
+  return candles.map((candle) => {
+    const typical = (candle.high + candle.low + candle.close) / 3
+    volume += candle.volume
+    priceVolume += typical * candle.volume
+    squareVolume += typical * typical * candle.volume
+    const vwap = priceVolume / volume
+    const sigma = Math.max(Math.sqrt(Math.max(squareVolume / volume - vwap * vwap, 0)), vwap * MIN_SIGMA_SHARE)
+    const deviation = Math.max(-SIGMA_LIMIT, Math.min(SIGMA_LIMIT, (candle.close - vwap) / sigma))
+    return { vwap, sigma, deviation }
+  })
+}
+
+function sessionProgress() {
+  const [hours, minutes] = clockText().split(':').map(Number)
+  const elapsed = Math.floor(((hours - 9) * 60 + minutes - 30) / 5)
+  return elapsed >= 18 && elapsed <= SESSION_POINTS ? elapsed : 52
+}
+
+function buildDays(quote) {
+  const rng = createRandom(hashText(`${quote.symbol}days`))
+  const days = Array.from({ length: 5 }, (_, index) => {
+    const points = []
+    let value = 0
+    for (let i = 0; i < SESSION_POINTS; i++) {
+      value += (rng() - 0.5) * 0.22
+      points.push(value)
+    }
+    return { points, complete: index < 4 }
+  })
+  const today = days[4]
+  today.points = today.points.slice(0, sessionProgress())
+  const live = (quote.last / quote.prevClose - 1) * 100
+  const shift = live - today.points[today.points.length - 1]
+  today.points = today.points.map((point, index) => point + (shift * index) / (today.points.length - 1))
+  return days
+}
+
+const daysOf = (quote) => {
+  if (!quote.days) quote.days = buildDays(quote)
+  return quote.days
 }
 
 const positions = [
@@ -597,50 +660,6 @@ function drawBoard(panel, ctx) {
   })
 }
 
-function drawCandles(ctx, x, y, w, h, candles, last) {
-  const t = theme()
-  const lowest = Math.min(...candles.map((candle) => candle.low))
-  const highest = Math.max(...candles.map((candle) => candle.high))
-  const pad = (highest - lowest) * 0.08
-  const low = lowest - pad
-  const span = highest + pad - low
-  const toY = (price) => y + h - ((price - low) / span) * h
-  const axisWidth = 130
-  ctx.strokeStyle = t.border
-  ctx.lineWidth = 2
-  for (let line = 0; line <= 4; line++) {
-    const gy = y + (line / 4) * h
-    ctx.beginPath()
-    ctx.moveTo(x, gy)
-    ctx.lineTo(x + w - axisWidth, gy)
-    ctx.stroke()
-    drawText(ctx, num2.format(low + span * (1 - line / 4)), x + w, gy, { size: 22, mono: true, align: 'right', color: t.mutedForeground })
-  }
-  const slot = (w - axisWidth) / candles.length
-  candles.forEach((candle, index) => {
-    const cx = x + index * slot + slot / 2
-    const color = candle.close >= candle.open ? t.positive : t.negative
-    ctx.strokeStyle = color
-    ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.moveTo(cx, toY(candle.high))
-    ctx.lineTo(cx, toY(candle.low))
-    ctx.stroke()
-    const top = toY(Math.max(candle.open, candle.close))
-    ctx.fillStyle = color
-    ctx.fillRect(cx - slot * 0.3, top, slot * 0.6, Math.max(3, Math.abs(toY(candle.open) - toY(candle.close))))
-  })
-  ctx.setLineDash([10, 8])
-  ctx.strokeStyle = t.info
-  ctx.beginPath()
-  ctx.moveTo(x, toY(last))
-  ctx.lineTo(x + w - axisWidth, toY(last))
-  ctx.stroke()
-  ctx.setLineDash([])
-  fillRounded(ctx, x + w - axisWidth + 4, toY(last) - 18, axisWidth - 4, 36, 8, t.info)
-  drawText(ctx, num2.format(last), x + w - 8, toY(last), { size: 22, weight: 600, mono: true, align: 'right', color: t.primaryForeground })
-}
-
 function drawTradePage(panel, ctx, frame) {
   const t = theme()
   const quote = quoteOf(state.symbol)
@@ -654,12 +673,41 @@ function drawTradePage(panel, ctx, frame) {
   drawText(ctx, `${num2.format(quote.last - quote.prevClose)}   ${pct2.format(change * 100)}%`, frame.x + frame.w - 8, frame.y + 82, {
     size: 30, weight: 600, mono: true, align: 'right', color: signedColor(change),
   })
-  PERIODS.forEach(([label], index) => {
-    drawButton(panel, `period:${label}`, frame.x + index * 140, frame.y + 132, 130, 56, label, {
-      variant: state.period === label ? 'primary' : 'outline', onClick: () => setPeriod(label),
+  const modeWidth = (frame.w - 5 * 10) / CHART_MODES.length
+  CHART_MODES.forEach(([key, label], index) => {
+    drawButton(panel, `mode:${key}`, frame.x + index * (modeWidth + 10), frame.y + 132, modeWidth, 56, label, {
+      variant: state.chartMode === key ? 'primary' : 'outline', onClick: () => chartScene.setMode(key),
     })
   })
-  drawCandles(ctx, frame.x, frame.y + 216, frame.w, frame.h - 216, candlesOf(quote, state.period), quote.last)
+  if (state.chartMode === 'candles' || state.chartMode === 'vwap') {
+    PERIODS.forEach(([label], index) => {
+      drawButton(panel, `period:${label}`, frame.x + index * 140, frame.y + 204, 130, 56, label, {
+        variant: state.period === label ? 'secondary' : 'outline', onClick: () => setPeriod(label),
+      })
+    })
+  } else {
+    drawText(ctx, 'Synthetic data, not a market feed', frame.x + 8, frame.y + 232, { size: 24, color: t.mutedForeground })
+  }
+  const session = candlesOf(quote, '1D')
+  const latest = vwapSeries(session)[session.length - 1]
+  const tiles = [
+    ['Last', num2.format(quote.last), t.foreground], ['VWAP', num2.format(latest.vwap), t.foreground],
+    ['Deviation', `${num2.format(latest.deviation)} sd`, signedColor(latest.deviation)],
+    ['Day high', num2.format(Math.max(...session.map((candle) => candle.high))), t.foreground],
+    ['Day low', num2.format(Math.min(...session.map((candle) => candle.low))), t.foreground],
+    ['Volume', `${int0.format(quote.volume / 1e6)}M`, t.foreground],
+  ]
+  const tileWidth = (frame.w - 5 * 12) / tiles.length
+  tiles.forEach(([label, value, color], index) => {
+    const x = frame.x + index * (tileWidth + 12)
+    drawCard(ctx, x, frame.y + 286, tileWidth, 104)
+    drawText(ctx, label, x + 16, frame.y + 318, { size: 22, color: t.mutedForeground })
+    drawText(ctx, value, x + 16, frame.y + 362, { size: 28, weight: 600, mono: true, color, maxWidth: tileWidth - 24 })
+  })
+  CHART_LEGENDS[state.chartMode].forEach((line, index) => {
+    drawText(ctx, line, frame.x + 8, frame.y + 430 + index * 36, { size: 24, color: t.mutedForeground })
+  })
+  drawText(ctx, 'The 3D chart is on the table: look down.', frame.x + 8, frame.y + 510, { size: 24, weight: 600, color: t.info })
 }
 
 function drawPortfolioPage(panel, ctx, frame) {
@@ -1306,6 +1354,649 @@ function createSky() {
 const sky = createSky()
 
 
+/* ---------- the 3D charts ---------- */
+
+const CHART_WIDTH = 1.2
+const CHART_HEIGHT = 0.45
+const CHART_DEPTH = 0.4
+const CHART_TILT = 0.55
+const CHART_FLAT_TILT = 0.05
+const FLAT_MODES = ['book', 'vol', 'yield']
+const CHART_HOME_ZOOM = 1.1
+const CHART_HOME_ANCHOR_Y = 0.72
+const CHART_DETAIL_ZOOM = 3.5
+const MAX_CANDLES = 78
+const MIN_CANDLE_DEPTH = 0.02
+const MAX_CANDLE_DEPTH = 0.3
+const SIGMA_TO_Z = 0.07
+const DAY_SPACING = 0.07
+const DAY_BASELINE = 0.25
+const DAY_HEIGHT_SCALE = 0.2
+const DAY_TICKS_PER_POINT = 5
+const BOOK_COLUMNS = 80
+const BOOK_ROWS = 41
+const BOOK_TICK = 0.1
+const BOOK_MAX_HEIGHT = 0.2
+const BOOK_PERSISTENCE = 0.7
+const BOOK_MAX_LIQUIDITY = 1.6
+const BOOK_RECENTER_TICKS = 15
+const SURFACE_MAX_HEIGHT = 0.35
+const GRID_COLOR = 0x8fa3c2
+const VOL_EXPIRIES = [7, 14, 30, 60, 90, 180, 270, 365]
+const YIELD_MATURITIES = [0.08, 0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30]
+const YIELD_ROWS = 16
+
+const CHART_MODES = [['candles', 'Candles'], ['vwap', 'VWAP'], ['days', '5 Days'], ['book', 'Book'], ['vol', 'Vol'], ['yield', 'Yield']]
+const CHART_LEGENDS = {
+  candles: ['Each candle is a box: height is the high-low range, depth is the volume.', 'Busy periods look thick. Press a candle to fly into it.'],
+  vwap: ['Price floats in front of the VWAP plane when it is above VWAP and behind it when below,', 'measured in standard deviations. The stems show the pull back to VWAP.'],
+  days: ['Five sessions layered in depth as percent change, the oldest at the back.', 'Today is on top, in front, and still being drawn.'],
+  book: ['Time runs across, price into the depth and resting liquidity is the height.', 'Color is traded volume. Synthetic level 2 data.'],
+  vol: ['Implied volatility: strike across, expiry into the depth, volatility as height.', 'Synthetic surface, the smile and the term structure move slowly.'],
+  yield: ['Yield by maturity across, time into the depth and yield as height.', 'Synthetic curve, now at the front.'],
+}
+
+const RAMP = [[0, 0.06, 0.16, 0.55], [0.35, 0, 0.7, 0.9], [0.65, 0.95, 0.85, 0.2], [1, 1, 0.25, 0.2]]
+
+function writeRamp(array, offset, value) {
+  const v = Math.max(0, Math.min(1, value))
+  for (let i = 1; i < RAMP.length; i++) {
+    if (v > RAMP[i][0]) continue
+    const [t0, r0, g0, b0] = RAMP[i - 1]
+    const [t1, r1, g1, b1] = RAMP[i]
+    const f = (v - t0) / (t1 - t0)
+    array[offset] = r0 + (r1 - r0) * f
+    array[offset + 1] = g0 + (g1 - g0) * f
+    array[offset + 2] = b0 + (b1 - b0) * f
+    return
+  }
+}
+
+const dynamicAttribute = (array) => new THREE.BufferAttribute(array, 3).setUsage(THREE.DynamicDrawUsage)
+
+function makeLines(points) {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3))
+  return new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: GRID_COLOR, transparent: true, opacity: 0.2, depthWrite: false }))
+}
+
+function createWallGrid(width, height, columns, rows) {
+  const points = []
+  for (let c = 0; c <= columns; c++) points.push((c / columns - 0.5) * width, 0, 0, (c / columns - 0.5) * width, height, 0)
+  for (let r = 0; r <= rows; r++) points.push(-width / 2, (r / rows) * height, 0, width / 2, (r / rows) * height, 0)
+  return makeLines(points)
+}
+
+function createFloorGrid(width, zNear, zFar, columns, rows) {
+  const points = []
+  for (let c = 0; c <= columns; c++) points.push((c / columns - 0.5) * width, 0, zNear, (c / columns - 0.5) * width, 0, zFar)
+  for (let r = 0; r <= rows; r++) {
+    const z = zNear + (r / rows) * (zFar - zNear)
+    points.push(-width / 2, 0, z, width / 2, 0, z)
+  }
+  return makeLines(points)
+}
+
+function addChartLabel(parent, x, y, z, width = 0.2, height = 0.05) {
+  const label = createLabelSprite(width, height, 320, 80)
+  label.sprite.position.set(x, y, z)
+  parent.add(label.sprite)
+  return label
+}
+
+const setChartLabel = (label, text, color = '#ffffff') => drawLabel(label, text, { fill: LABEL_BACKING, color })
+
+function indexGrid(columns, rows) {
+  const indices = []
+  for (let c = 0; c < columns - 1; c++) {
+    for (let r = 0; r < rows - 1; r++) {
+      const a = c * rows + r
+      const b = a + 1
+      const d = a + rows
+      indices.push(a, d, b, b, d, d + 1)
+    }
+  }
+  return indices
+}
+
+class ChartMode {
+  constructor(root) {
+    this.group = new THREE.Group()
+    this.group.visible = false
+    root.add(this.group)
+  }
+
+  refresh() {}
+
+  tick() {
+    this.refresh()
+  }
+
+  update() {}
+}
+
+const CHART_MATRIX = new THREE.Matrix4()
+const CHART_POSITION = new THREE.Vector3()
+const CHART_SCALE = new THREE.Vector3()
+const CHART_IDENTITY = new THREE.Quaternion()
+const CHART_COLOR = new THREE.Color()
+
+class CandleDepthChart extends ChartMode {
+  constructor(root, scene) {
+    super(root)
+    this.bodies = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0.15 }), MAX_CANDLES)
+    this.wicks = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({ roughness: 0.6 }), MAX_CANDLES)
+    for (const mesh of [this.bodies, this.wicks]) {
+      mesh.frustumCulled = false
+      this.group.add(mesh)
+    }
+    const wall = createWallGrid(CHART_WIDTH, CHART_HEIGHT, 12, 4)
+    wall.position.z = -CHART_DEPTH
+    this.group.add(wall, createFloorGrid(CHART_WIDTH, 0, -CHART_DEPTH, 12, 4))
+    this.items = Array.from({ length: MAX_CANDLES }, (_, index) => {
+      const object = new THREE.Object3D()
+      this.group.add(object)
+      return { type: 'candle', index, object, candle: null }
+    })
+    this.bodies.userData.instanceItems = this.items
+    scene.interactives.push(this.bodies)
+    this.priceLabels = Array.from({ length: 5 }, (_, index) => addChartLabel(this.group, -CHART_WIDTH / 2 - 0.12, (index / 4) * CHART_HEIGHT, -CHART_DEPTH))
+    const depthLabel = addChartLabel(this.group, CHART_WIDTH / 2 + 0.12, 0.02, -CHART_DEPTH / 2, 0.3, 0.05)
+    setChartLabel(depthLabel, 'Depth = volume')
+  }
+
+  refresh() {
+    const quote = quoteOf(state.symbol)
+    const candles = candlesOf(quote, state.period)
+    const count = candles.length
+    const low = Math.min(...candles.map((candle) => candle.low))
+    const span = Math.max(...candles.map((candle) => candle.high)) - low || 1
+    const maxVolume = Math.max(...candles.map((candle) => candle.volume))
+    const slot = CHART_WIDTH / count
+    const t = theme()
+    const toY = (price) => ((price - low) / span) * CHART_HEIGHT
+    candles.forEach((candle, index) => {
+      const x = (index + 0.5) * slot - CHART_WIDTH / 2
+      const yOpen = toY(candle.open)
+      const yClose = toY(candle.close)
+      const bodyHeight = Math.max(0.003, Math.abs(yClose - yOpen))
+      const bodyY = Math.min(yOpen, yClose) + bodyHeight / 2
+      const depth = MIN_CANDLE_DEPTH + (candle.volume / maxVolume) * (MAX_CANDLE_DEPTH - MIN_CANDLE_DEPTH)
+      CHART_MATRIX.compose(CHART_POSITION.set(x, bodyY, -depth / 2), CHART_IDENTITY, CHART_SCALE.set(slot * 0.72, bodyHeight, depth))
+      this.bodies.setMatrixAt(index, CHART_MATRIX)
+      const wickHeight = Math.max(0.003, toY(candle.high) - toY(candle.low))
+      CHART_MATRIX.compose(CHART_POSITION.set(x, toY(candle.low) + wickHeight / 2, -0.002), CHART_IDENTITY, CHART_SCALE.set(0.004, wickHeight, 0.004))
+      this.wicks.setMatrixAt(index, CHART_MATRIX)
+      CHART_COLOR.set(candle.close >= candle.open ? t.positive : t.negative)
+      this.bodies.setColorAt(index, CHART_COLOR)
+      this.wicks.setColorAt(index, CHART_COLOR)
+      const item = this.items[index]
+      item.candle = candle
+      item.object.position.set(x, bodyY + bodyHeight / 2, -depth / 2)
+    })
+    this.bodies.count = count
+    this.wicks.count = count
+    for (const mesh of [this.bodies, this.wicks]) {
+      mesh.instanceMatrix.needsUpdate = true
+      mesh.instanceColor.needsUpdate = true
+    }
+    this.priceLabels.forEach((label, index) => setChartLabel(label, num2.format(low + (span * index) / 4)))
+  }
+}
+
+class VwapChart extends ChartMode {
+  constructor(root) {
+    super(root)
+    ;[[-2, 0.05], [-1, 0.05], [0, 0.14], [1, 0.05], [2, 0.05]].forEach(([sigma, opacity]) => {
+      const color = sigma === 0 ? 0xffffff : sigma > 0 ? 0x6ed19d : 0xf0646a
+      const plane = new THREE.Mesh(
+        new THREE.PlaneGeometry(CHART_WIDTH, CHART_HEIGHT),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false }),
+      )
+      plane.position.set(0, CHART_HEIGHT / 2, sigma * SIGMA_TO_Z)
+      this.group.add(plane)
+      const label = addChartLabel(this.group, CHART_WIDTH / 2 + 0.12, CHART_HEIGHT + 0.03, sigma * SIGMA_TO_Z)
+      setChartLabel(label, sigma === 0 ? 'VWAP' : `${sigma > 0 ? '+' : ''}${sigma} sd`)
+    })
+    this.group.add(createFloorGrid(CHART_WIDTH, 2.5 * SIGMA_TO_Z, -2.5 * SIGMA_TO_Z, 12, 5))
+    const makeBuffer = (vertices) => {
+      const geometry = new THREE.BufferGeometry()
+      const positions = new Float32Array(vertices * 3)
+      const colors = new Float32Array(vertices * 3)
+      geometry.setAttribute('position', dynamicAttribute(positions))
+      geometry.setAttribute('color', dynamicAttribute(colors))
+      return { geometry, positions, colors }
+    }
+    this.vwapBuffer = makeBuffer(MAX_CANDLES)
+    this.priceBuffer = makeBuffer(MAX_CANDLES)
+    this.stemBuffer = makeBuffer(MAX_CANDLES * 2)
+    this.vwapLine = new THREE.Line(this.vwapBuffer.geometry, new THREE.LineBasicMaterial({ color: 0xffffff }))
+    this.priceLine = new THREE.Line(this.priceBuffer.geometry, new THREE.LineBasicMaterial({ vertexColors: true }))
+    this.stems = new THREE.LineSegments(this.stemBuffer.geometry, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.6 }))
+    this.dots = new THREE.Points(this.priceBuffer.geometry, new THREE.PointsMaterial({
+      size: 0.014, map: glowTexture, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    }))
+    for (const object of [this.vwapLine, this.priceLine, this.stems, this.dots]) {
+      object.frustumCulled = false
+      this.group.add(object)
+    }
+  }
+
+  refresh() {
+    const quote = quoteOf(state.symbol)
+    const candles = candlesOf(quote, state.period)
+    const series = vwapSeries(candles)
+    const count = candles.length
+    const values = [...candles.map((candle) => candle.close), ...series.map((entry) => entry.vwap)]
+    const low = Math.min(...values)
+    const span = Math.max(...values) - low || 1
+    const t = theme()
+    const positive = new THREE.Color(t.positive)
+    const negative = new THREE.Color(t.negative)
+    const white = new THREE.Color(0xffffff)
+    candles.forEach((candle, index) => {
+      const x = ((index + 0.5) / count - 0.5) * CHART_WIDTH
+      const yPrice = ((candle.close - low) / span) * CHART_HEIGHT
+      const yVwap = ((series[index].vwap - low) / span) * CHART_HEIGHT
+      const z = series[index].deviation * SIGMA_TO_Z
+      CHART_COLOR.copy(white).lerp(series[index].deviation >= 0 ? positive : negative, Math.min(1, Math.abs(series[index].deviation) / 2))
+      this.vwapBuffer.positions.set([x, yVwap, 0], index * 3)
+      this.priceBuffer.positions.set([x, yPrice, z], index * 3)
+      this.priceBuffer.colors.set([CHART_COLOR.r, CHART_COLOR.g, CHART_COLOR.b], index * 3)
+      this.stemBuffer.positions.set([x, yVwap, 0, x, yPrice, z], index * 6)
+      this.stemBuffer.colors.set([1, 1, 1, CHART_COLOR.r, CHART_COLOR.g, CHART_COLOR.b], index * 6)
+    })
+    for (const buffer of [this.vwapBuffer, this.priceBuffer, this.stemBuffer]) {
+      buffer.geometry.attributes.position.needsUpdate = true
+      buffer.geometry.attributes.color.needsUpdate = true
+    }
+    this.vwapBuffer.geometry.setDrawRange(0, count)
+    this.priceBuffer.geometry.setDrawRange(0, count)
+    this.stemBuffer.geometry.setDrawRange(0, count * 2)
+  }
+}
+
+class DaysChart extends ChartMode {
+  constructor(root) {
+    super(root)
+    this.names = ['D-4', 'D-3', 'D-2', 'D-1', 'Today']
+    this.days = Array.from({ length: 5 }, (_, index) => {
+      const group = new THREE.Group()
+      group.position.z = -(4 - index) * DAY_SPACING
+      this.group.add(group)
+      const positions = new Float32Array(SESSION_POINTS * 2 * 3)
+      const colors = new Float32Array(SESSION_POINTS * 2 * 3)
+      const linePositions = new Float32Array(SESSION_POINTS * 3)
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', dynamicAttribute(positions))
+      geometry.setAttribute('color', dynamicAttribute(colors))
+      const indices = []
+      for (let i = 0; i < SESSION_POINTS - 1; i++) indices.push(2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 1, 2 * i + 3, 2 * i + 2)
+      geometry.setIndex(indices)
+      const today = index === 4
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+        vertexColors: true, transparent: true, opacity: today ? 0.85 : 0.18 + index * 0.07, side: THREE.DoubleSide, depthWrite: false,
+      }))
+      mesh.frustumCulled = false
+      group.add(mesh)
+      const lineGeometry = new THREE.BufferGeometry()
+      lineGeometry.setAttribute('position', dynamicAttribute(linePositions))
+      const line = new THREE.Line(lineGeometry, new THREE.LineBasicMaterial({
+        color: today ? 0xffffff : 0x8fa3c2, transparent: true, opacity: today ? 1 : 0.35 + index * 0.1,
+      }))
+      line.frustumCulled = false
+      group.add(line)
+      const label = addChartLabel(this.group, CHART_WIDTH / 2 + 0.14, DAY_BASELINE + (index - 2) * 0.06, -(4 - index) * DAY_SPACING, 0.26, 0.05)
+      return { group, geometry, lineGeometry, positions, colors, linePositions, label }
+    })
+    const baseline = new THREE.Mesh(
+      new THREE.PlaneGeometry(CHART_WIDTH, 4 * DAY_SPACING),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false }),
+    )
+    baseline.rotation.x = -Math.PI / 2
+    baseline.position.set(0, DAY_BASELINE, -2 * DAY_SPACING)
+    this.group.add(baseline, createFloorGrid(CHART_WIDTH, 0.04, -4 * DAY_SPACING - 0.04, 12, 5))
+    this.now = createGlow(0xffffff, 0.07)
+    this.days[4].group.add(this.now)
+    for (const [hour, text] of [[0, '09:30'], [0.5, '12:45'], [1, '16:00']]) {
+      setChartLabel(addChartLabel(this.group, (hour - 0.5) * CHART_WIDTH, -0.04, 0.06), text)
+    }
+  }
+
+  tick(count) {
+    const quote = quoteOf(state.symbol)
+    const today = daysOf(quote)[4]
+    const live = (quote.last / quote.prevClose - 1) * 100
+    today.points[today.points.length - 1] = live
+    if (count % DAY_TICKS_PER_POINT === 0 && today.points.length < SESSION_POINTS) today.points.push(live)
+    this.refresh()
+  }
+
+  refresh() {
+    const days = daysOf(quoteOf(state.symbol))
+    const maxAbs = Math.max(0.5, ...days.flatMap((day) => day.points.map(Math.abs)))
+    const scale = DAY_HEIGHT_SCALE / maxAbs
+    const t = theme()
+    const positive = new THREE.Color(t.positive)
+    const negative = new THREE.Color(t.negative)
+    days.forEach((day, index) => {
+      const view = this.days[index]
+      const count = day.points.length
+      day.points.forEach((point, k) => {
+        const x = (k / (SESSION_POINTS - 1) - 0.5) * CHART_WIDTH
+        const y = DAY_BASELINE + point * scale
+        view.positions.set([x, y, 0, x, DAY_BASELINE, 0], k * 6)
+        CHART_COLOR.copy(point >= 0 ? positive : negative)
+        view.colors.set([CHART_COLOR.r, CHART_COLOR.g, CHART_COLOR.b, CHART_COLOR.r * 0.3, CHART_COLOR.g * 0.3, CHART_COLOR.b * 0.3], k * 6)
+        view.linePositions.set([x, y, 0], k * 3)
+      })
+      view.geometry.attributes.position.needsUpdate = true
+      view.geometry.attributes.color.needsUpdate = true
+      view.lineGeometry.attributes.position.needsUpdate = true
+      view.geometry.setDrawRange(0, Math.max(0, (count - 1) * 6))
+      view.lineGeometry.setDrawRange(0, count)
+      setChartLabel(view.label, `${this.names[index]} ${pct2.format(day.points[count - 1])}%`, index === 4 ? '#ffffff' : '#b8c0d0')
+    })
+    const todayPoints = days[4].points
+    this.now.position.set(((todayPoints.length - 1) / (SESSION_POINTS - 1) - 0.5) * CHART_WIDTH, DAY_BASELINE + todayPoints[todayPoints.length - 1] * scale, 0)
+  }
+}
+
+class BookTerrain extends ChartMode {
+  constructor(root) {
+    super(root)
+    this.symbol = null
+    this.center = 0
+    this.random = createRandom(11)
+    this.liquidity = new Float32Array(BOOK_COLUMNS * BOOK_ROWS)
+    this.traded = new Float32Array(BOOK_COLUMNS * BOOK_ROWS)
+    this.midRows = new Float32Array(BOOK_COLUMNS)
+    this.walls = new Float32Array(BOOK_ROWS)
+    const vertices = BOOK_COLUMNS * BOOK_ROWS
+    this.positions = new Float32Array(vertices * 3)
+    this.colors = new Float32Array(vertices * 3)
+    for (let c = 0; c < BOOK_COLUMNS; c++) {
+      for (let r = 0; r < BOOK_ROWS; r++) {
+        this.positions[(c * BOOK_ROWS + r) * 3] = (c / (BOOK_COLUMNS - 1) - 0.5) * CHART_WIDTH
+        this.positions[(c * BOOK_ROWS + r) * 3 + 2] = -(r / (BOOK_ROWS - 1)) * CHART_DEPTH
+      }
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', dynamicAttribute(this.positions))
+    geometry.setAttribute('color', dynamicAttribute(this.colors))
+    geometry.setIndex(indexGrid(BOOK_COLUMNS, BOOK_ROWS))
+    this.geometry = geometry
+    this.mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, side: THREE.DoubleSide }))
+    this.mesh.frustumCulled = false
+    this.linePositions = new Float32Array(BOOK_COLUMNS * 3)
+    const lineGeometry = new THREE.BufferGeometry()
+    lineGeometry.setAttribute('position', dynamicAttribute(this.linePositions))
+    this.midLine = new THREE.Line(lineGeometry, new THREE.LineBasicMaterial({ color: 0xffffff }))
+    this.midLine.frustumCulled = false
+    this.group.add(this.mesh, this.midLine, createFloorGrid(CHART_WIDTH, 0, -CHART_DEPTH, 12, 8))
+    this.priceLabels = Array.from({ length: 5 }, (_, index) => addChartLabel(this.group, -CHART_WIDTH / 2 - 0.12, 0, -(index / 4) * CHART_DEPTH))
+    setChartLabel(addChartLabel(this.group, CHART_WIDTH / 2 + 0.1, 0.02, 0.04, 0.3, 0.05), 'Now')
+    setChartLabel(addChartLabel(this.group, -CHART_WIDTH / 2 + 0.05, 0.02, 0.04, 0.3, 0.05), 'Time')
+  }
+
+  reset() {
+    const quote = quoteOf(state.symbol)
+    this.symbol = state.symbol
+    this.center = Math.round(quote.last / BOOK_TICK) * BOOK_TICK
+    this.liquidity.fill(0)
+    this.traded.fill(0)
+    for (let r = 0; r < BOOK_ROWS; r++) this.walls[r] = this.random() < 0.12 ? 0.4 + this.random() * 0.9 : 0
+    const mids = new Array(BOOK_COLUMNS)
+    mids[BOOK_COLUMNS - 1] = quote.last
+    for (let i = BOOK_COLUMNS - 2; i >= 0; i--) mids[i] = mids[i + 1] + (this.random() - 0.5) * 0.12
+    for (const mid of mids) this.pushColumn(mid)
+  }
+
+  pushColumn(mid) {
+    this.liquidity.copyWithin(0, BOOK_ROWS)
+    this.traded.copyWithin(0, BOOK_ROWS)
+    this.midRows.copyWithin(0, 1)
+    const midRow = Math.max(0, Math.min(BOOK_ROWS - 1, Math.round((mid - this.center) / BOOK_TICK) + (BOOK_ROWS - 1) / 2))
+    this.midRows[BOOK_COLUMNS - 1] = midRow
+    const base = (BOOK_COLUMNS - 1) * BOOK_ROWS
+    const rng = this.random
+    for (let r = 0; r < BOOK_ROWS; r++) {
+      const k = r - midRow
+      this.walls[r] *= 0.97
+      if (rng() < 0.01) this.walls[r] = 0.4 + rng() * 0.9
+      const profile = 0.15 + 0.55 * (1 - Math.exp(-Math.abs(k) / 10))
+      const target = Math.min(BOOK_MAX_LIQUIDITY, profile * (0.9 + 0.2 * rng()) + this.walls[r])
+      this.liquidity[base + r] = this.liquidity[base - BOOK_ROWS + r] * BOOK_PERSISTENCE + target * (1 - BOOK_PERSISTENCE)
+      this.traded[base + r] = Math.abs(k) <= 3 ? rng() * (1 - Math.abs(k) / 4) * (rng() > 0.8 ? 1 : 0.35) : rng() > 0.995 ? rng() : 0
+    }
+  }
+
+  rebuild() {
+    const side = [[0.1, 0.5, 0.3], [0.6, 0.18, 0.22]]
+    const hot = [0, 0, 0]
+    for (let c = 0; c < BOOK_COLUMNS; c++) {
+      for (let r = 0; r < BOOK_ROWS; r++) {
+        const i = c * BOOK_ROWS + r
+        const liquidity = this.liquidity[i] / BOOK_MAX_LIQUIDITY
+        const trade = Math.min(1, this.traded[i])
+        this.positions[i * 3 + 1] = liquidity * BOOK_MAX_HEIGHT
+        const tint = side[r < this.midRows[c] ? 0 : 1]
+        writeRamp(hot, 0, 0.55 + 0.45 * trade)
+        for (let channel = 0; channel < 3; channel++) {
+          this.colors[i * 3 + channel] = tint[channel] * (0.4 + 0.6 * liquidity) * (1 - trade) + hot[channel] * trade
+        }
+      }
+      const row = this.midRows[c]
+      this.linePositions.set([this.positions[(c * BOOK_ROWS) * 3], this.liquidity[c * BOOK_ROWS + row] / BOOK_MAX_LIQUIDITY * BOOK_MAX_HEIGHT + 0.012, -(row / (BOOK_ROWS - 1)) * CHART_DEPTH], c * 3)
+    }
+    this.geometry.attributes.position.needsUpdate = true
+    this.geometry.attributes.color.needsUpdate = true
+    this.geometry.computeVertexNormals()
+    this.midLine.geometry.attributes.position.needsUpdate = true
+  }
+
+  refresh() {
+    if (this.symbol !== state.symbol) this.reset()
+    this.priceLabels.forEach((label, index) => {
+      setChartLabel(label, num2.format(this.center + ((index * (BOOK_ROWS - 1)) / 4 - (BOOK_ROWS - 1) / 2) * BOOK_TICK))
+    })
+    this.rebuild()
+  }
+
+  tick() {
+    const mid = quoteOf(state.symbol).last
+    if (this.symbol !== state.symbol || Math.abs(mid - this.center) > BOOK_RECENTER_TICKS * BOOK_TICK) this.reset()
+    else this.pushColumn(mid)
+    this.refresh()
+  }
+}
+
+class SurfaceChart extends ChartMode {
+  constructor(root, kind) {
+    super(root)
+    this.kind = kind
+    this.columns = kind === 'vol' ? 21 : YIELD_MATURITIES.length
+    this.rows = kind === 'vol' ? VOL_EXPIRIES.length : YIELD_ROWS
+    const vertices = this.columns * this.rows
+    this.positions = new Float32Array(vertices * 3)
+    this.colors = new Float32Array(vertices * 3)
+    for (let c = 0; c < this.columns; c++) {
+      for (let r = 0; r < this.rows; r++) {
+        this.positions[(c * this.rows + r) * 3] = (c / (this.columns - 1) - 0.5) * CHART_WIDTH
+        this.positions[(c * this.rows + r) * 3 + 2] = -(r / (this.rows - 1)) * CHART_DEPTH
+      }
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', dynamicAttribute(this.positions))
+    geometry.setAttribute('color', dynamicAttribute(this.colors))
+    geometry.setIndex(indexGrid(this.columns, this.rows))
+    this.geometry = geometry
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, side: THREE.DoubleSide }))
+    const wire = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.18 }))
+    for (const object of [mesh, wire]) {
+      object.frustumCulled = false
+      this.group.add(object)
+    }
+    this.group.add(createFloorGrid(CHART_WIDTH, 0, -CHART_DEPTH, 10, 8))
+    const xLabels = kind === 'vol'
+      ? [[0, '80%'], [5, '90%'], [10, '100%'], [15, '110%'], [20, '120%']]
+      : [[0, '1M'], [3, '1Y'], [6, '5Y'], [8, '10Y'], [10, '30Y']]
+    const zLabels = kind === 'vol' ? [[0, '7D'], [2, '1M'], [4, '3M'], [7, '1Y']] : [[0, 'Now'], [5, '-5M'], [10, '-10M'], [15, '-15M']]
+    for (const [column, text] of xLabels) setChartLabel(addChartLabel(this.group, (column / (this.columns - 1) - 0.5) * CHART_WIDTH, -0.03, 0.05), text)
+    for (const [row, text] of zLabels) setChartLabel(addChartLabel(this.group, CHART_WIDTH / 2 + 0.1, 0.02, -(row / (this.rows - 1)) * CHART_DEPTH), text)
+    setChartLabel(addChartLabel(this.group, 0, SURFACE_MAX_HEIGHT + 0.1, -CHART_DEPTH, 0.4, 0.06), kind === 'vol' ? 'Implied vol' : 'Yield curve')
+  }
+
+  valueAt(column, row, elapsed) {
+    if (this.kind === 'vol') {
+      const moneyness = 0.8 + (0.4 * column) / (this.columns - 1)
+      const years = VOL_EXPIRIES[row] / 365
+      const implied = 0.24 + 0.1 * Math.exp(-years * 6) + 0.06 * years - 0.45 * (moneyness - 1) * Math.exp(-years * 1.5)
+        + 1.8 * (moneyness - 1) ** 2 + 0.006 * Math.sin(elapsed * 0.8 + column * 0.5 + row)
+      return (implied - 0.15) / 0.45
+    }
+    const time = 1 - row / (this.rows - 1)
+    const maturity = YIELD_MATURITIES[column]
+    const yieldValue = 4.1 + 0.8 * (1 - Math.exp(-maturity / 4)) - 0.9 * (1 - time) * Math.exp(-maturity / 2) + 0.2 * Math.sin(time * 5 + maturity * 0.3)
+      + 0.03 * Math.sin(elapsed * 0.6 + column)
+    return (yieldValue - 3.2) / 2.6
+  }
+
+  update(deltaSeconds, elapsed) {
+    for (let c = 0; c < this.columns; c++) {
+      for (let r = 0; r < this.rows; r++) {
+        const i = c * this.rows + r
+        const value = Math.max(0, Math.min(1, this.valueAt(c, r, elapsed)))
+        this.positions[i * 3 + 1] = value * SURFACE_MAX_HEIGHT
+        writeRamp(this.colors, i * 3, value)
+      }
+    }
+    this.geometry.attributes.position.needsUpdate = true
+    this.geometry.attributes.color.needsUpdate = true
+    this.geometry.computeVertexNormals()
+  }
+}
+
+class ChartScene extends StageScene {
+  constructor() {
+    super()
+    this.level = 'chart'
+    this.ticks = 0
+    this.root = new THREE.Group()
+    this.root.rotation.x = -CHART_TILT
+    this.group.add(this.root)
+    this.charts = {
+      candles: new CandleDepthChart(this.root, this), vwap: new VwapChart(this.root), days: new DaysChart(this.root),
+      book: new BookTerrain(this.root), vol: new SurfaceChart(this.root, 'vol'), yield: new SurfaceChart(this.root, 'yield'),
+    }
+    this.setMode(state.chartMode)
+    this.home()
+  }
+
+  get chart() {
+    return this.charts[state.chartMode]
+  }
+
+  centerPoint() {
+    return new THREE.Vector3(0, CHART_HEIGHT / 2, -CHART_DEPTH / 2).applyEuler(this.root.rotation)
+  }
+
+  setMode(mode) {
+    state.chartMode = mode
+    for (const [key, chart] of Object.entries(this.charts)) chart.group.visible = key === mode
+    this.root.rotation.x = -(FLAT_MODES.includes(mode) ? CHART_FLAT_TILT : CHART_TILT)
+    this.chart.refresh()
+    if (this.level === 'chart') this.home()
+    invalidateAll()
+  }
+
+  stepMode(delta) {
+    const index = CHART_MODES.findIndex(([key]) => key === state.chartMode)
+    this.setMode(CHART_MODES[(index + delta + CHART_MODES.length) % CHART_MODES.length][0])
+  }
+
+  tick() {
+    this.ticks += 1
+    this.chart.tick(this.ticks)
+  }
+
+  refreshActive() {
+    this.chart.refresh()
+  }
+
+  onSymbolChange() {
+    this.refreshActive()
+  }
+
+  applyTheme() {
+    this.refreshActive()
+  }
+
+  update(deltaSeconds, elapsed) {
+    this.updateView(deltaSeconds)
+    this.chart.update(deltaSeconds, elapsed)
+  }
+
+  home() {
+    this.level = 'chart'
+    this.focusOn(this.centerPoint(), CHART_HOME_ZOOM, CHART_HOME_ANCHOR_Y)
+  }
+
+  focusCandle(item) {
+    this.level = 'detail'
+    this.group.updateMatrixWorld(true)
+    const point = item.object.getWorldPosition(new THREE.Vector3())
+    this.group.worldToLocal(point)
+    this.focusOn(point, CHART_DETAIL_ZOOM, 1.1, -1.1)
+  }
+
+  zoomIn(hovered) {
+    if (hovered?.type === 'candle') {
+      this.focusCandle(hovered)
+      return
+    }
+    this.level = 'zoom'
+    this.focusOn(this.centerPoint(), CHART_HOME_ZOOM * 1.8, 0.85)
+  }
+
+  zoomOut() { this.home() }
+
+  stepSymbol(delta) {
+    const index = quotes.findIndex((quote) => quote.symbol === state.symbol)
+    selectSymbol(quotes[(index + delta + quotes.length) % quotes.length].symbol)
+  }
+
+  up() { this.stepSymbol(1) }
+
+  down() { this.stepSymbol(-1) }
+
+  previous() { this.stepMode(-1) }
+
+  next() { this.stepMode(1) }
+
+  cycleMode() { this.stepMode(1) }
+
+  modeLabel() {
+    return CHART_MODES.find(([key]) => key === state.chartMode)[1]
+  }
+
+  breadcrumb() {
+    return [{ label: 'Chart', onClick: () => this.home() }, { label: this.modeLabel(), onClick: () => this.home() }]
+  }
+
+  describe(item) {
+    const { candle } = item
+    return [`O ${num2.format(candle.open)}  H ${num2.format(candle.high)}`, `L ${num2.format(candle.low)}  C ${num2.format(candle.close)}`]
+  }
+
+  onClick(item) {
+    this.zoomIn(item)
+  }
+}
+
+const chartScene = new ChartScene()
+
+
 /* ---------- the portfolio constellation ---------- */
 
 const ORBIT_RADII = [0.2, 0.32, 0.44, 0.56]
@@ -1520,10 +2211,12 @@ class PortfolioScene extends StageScene {
 }
 
 const portfolioScene = new PortfolioScene()
-let activeScene = portfolioScene
+let activeScene = chartScene
 
 function syncScene() {
-  portfolioScene.group.visible = true
+  activeScene = state.page === 'portfolio' ? portfolioScene : chartScene
+  portfolioScene.group.visible = activeScene === portfolioScene
+  chartScene.group.visible = activeScene === chartScene
   refreshInteractives()
 }
 
@@ -1534,6 +2227,7 @@ function refreshStageTheme() {
   floorRing.material.color.set(t.info)
   floorGlow.material.color.set(t.info)
   portfolioScene.applyTheme()
+  chartScene.applyTheme()
 }
 
 function drawDeck(panel, ctx) {
@@ -1807,17 +2501,20 @@ for (let index = 0; index < 2; index++) {
 
 function setPage(page) {
   state.page = page
+  syncScene()
   invalidateAll()
 }
 
 function selectSymbol(symbol) {
   state.symbol = symbol
   state.order.limit = Math.round(quoteOf(symbol).last * 100) / 100
+  chartScene.onSymbolChange()
   invalidateAll()
 }
 
 function setPeriod(period) {
   state.period = period
+  chartScene.refreshActive()
   invalidateAll()
 }
 
@@ -1939,6 +2636,7 @@ function render() {
     tickQuotes()
     for (const sector of SECTORS) sector.change += between(-0.04, 0.04)
     portfolioScene.refresh()
+    chartScene.tick()
     invalidateAll()
   }
   updatePointers()
